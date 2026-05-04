@@ -2,6 +2,11 @@
 name = "kimai-timer"
 version = "0.1.0"
 edition = "2024"
+description = "Seriously Simple Time Tracker"
+license = "MIT"
+repository = "https://github.com/bradenhc/kimai-timer"
+categories = ["command-line-utilities"]
+keywords = ["kimai", "productivity"]
 
 [[bin]]
 name = "kt"
