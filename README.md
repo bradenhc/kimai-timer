@@ -69,6 +69,8 @@ output.
 
 ## Integrating with Kimai
 
+> **NOTE** This feature is a work in progress
+
 [Kimai] is a powerful open-source time tracking service. It has tons of features
 and a slick web interface for managing the time spent on tasks.
 
