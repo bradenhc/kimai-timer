@@ -189,7 +189,7 @@ impl CommandLog {
     fn log_table(events: &[TimerEvent], day_range: &[OffsetDateTime]) {
         if events.is_empty() {
             println!();
-            println!("No events in time log: use `kt in` and `kt out` to track your time");
+            println!("No events in time log window: use `kt in` and `kt out` to track your time");
             println!();
 
             return;
