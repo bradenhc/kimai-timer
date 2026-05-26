@@ -24,7 +24,7 @@ impl CommandList {
             let last_task = store.get_last_task()?;
 
             for t in tasks {
-                if current_task.as_ref().is_some_and(|c| *c == t) {
+                if current_task.as_ref().is_some_and(|c| c.task == t) {
                     println!("* {}", t.bold().green());
                 } else if last_task.as_ref().is_some_and(|l| *l == t) {
                     println!("- {}", t.bold());

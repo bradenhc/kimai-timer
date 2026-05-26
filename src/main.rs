@@ -86,6 +86,10 @@ pub struct CliConfig {
 ///
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Add a new time event (primarily for ammending missed events).
+    #[clap(visible_alias = "a")]
+    Add(cmd::CommandAdd),
+
     /// Lists the current set of tasks.
     #[clap(visible_alias = "ls")]
     List(cmd::CommandList),
@@ -126,6 +130,7 @@ fn run_main() -> Result<()> {
     trace::init();
 
     match config.command {
+        Command::Add(cmd) => cmd.execute(),
         Command::List(cmd) => cmd.execute(),
         Command::Log(cmd) => cmd.execute(),
         Command::In(cmd) => cmd.execute(),

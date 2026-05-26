@@ -4,9 +4,11 @@ use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use colored::Colorize;
 use simsearch::SimSearch;
+use time::macros::format_description;
+use time::{OffsetDateTime, UtcOffset};
 
 use crate::cmd::CommandOut;
-use crate::store::{Store, TimerEvent};
+use crate::store::Store;
 
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT_ARG, styles = crate::STYLES)]
@@ -31,7 +33,7 @@ impl CommandIn {
         let task = match self.task {
             None => {
                 if let Some(c) = current_task {
-                    println!("Already punched in to {}", c.green());
+                    println!("Already punched in to {}", c.task.green());
                     return Ok(());
                 }
 
@@ -42,7 +44,6 @@ impl CommandIn {
 
             Some(task) => {
                 if !tasks.contains(&task) {
-                    // Help the user out be suggesting close matches to what they typed
                     let mut engine = SimSearch::new();
                     let indexed_tasks: Vec<_> = tasks.into_iter().collect();
                     for (i, t) in indexed_tasks.iter().enumerate() {
@@ -64,7 +65,7 @@ impl CommandIn {
                 }
 
                 if let Some(c) = current_task {
-                    if c == task {
+                    if c.task == task {
                         println!("Already punched in to {task}");
                         return Ok(());
                     }
@@ -76,13 +77,19 @@ impl CommandIn {
             }
         };
 
-        let event = TimerEvent::start(&task);
+        let start = OffsetDateTime::now_utc().truncate_to_second();
+        let start_ts = start.unix_timestamp();
 
-        store.add_task(&task)?;
-        store.append_timer_event(event.clone())?;
-        store.set_current_task(&task)?;
+        store.set_current_task(&task, start_ts)?;
 
-        println!("{event}");
+        let local_time = start
+            .to_offset(UtcOffset::current_local_offset().unwrap())
+            .format(&format_description!(
+                "[year]-[month]-[day] [hour]:[minute]:[second]"
+            ))
+            .unwrap();
+
+        println!("Punched in to {} at {local_time}", task.green());
 
         Ok(())
     }

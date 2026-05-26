@@ -9,9 +9,8 @@ use tabled::builder::Builder;
 use tabled::settings::Style;
 use time::macros::format_description;
 use time::{Duration, OffsetDateTime, UtcOffset};
-use tracing::warn;
 
-use crate::store::{Store, TimerAction, TimerEvent, TimerEventIterator};
+use crate::store::{CurrentTask, PersistedEventIterator, Store, StoreEvent, TimeInterval};
 
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT, styles = crate::STYLES)]
@@ -23,7 +22,7 @@ pub struct CommandLog {
     #[arg(long, short)]
     days: Option<i64>,
 
-    /// Formats the output as JSONL. Each JSON object represents a single timer event, and each
+    /// Formats the output as JSONL. Each JSON object represents a single store event, and each
     /// event is separated by a newline.
     #[arg(long, short)]
     json: bool,
@@ -32,8 +31,7 @@ pub struct CommandLog {
     #[arg(long, short)]
     period: bool,
 
-    /// Formats the output as raw start/stop events (same as when using the 'in' and 'out'
-    /// commands).
+    /// Formats the output as raw interval records, one per line.
     #[arg(long, short)]
     raw: bool,
 
@@ -44,44 +42,30 @@ pub struct CommandLog {
 
 impl CommandLog {
     pub fn execute(self) -> Result<()> {
-        // Make it easier on the user by showing them time in the local offset. We collect it once
-        // at the beginning in case it fails. It shouldn't, but it could. Perhaps later we can
-        // handle the failure case more elegantly.
-
         let offset = UtcOffset::current_local_offset().unwrap();
-
-        // Collect all the events in our window: the range of days for which we are interested in
-        // viewing task times.
 
         let day_range = self.compute_day_range(offset);
 
         let store = Store::new()?;
-        let all_events = store.fetch_timer_events()?;
-        let events = Self::filter_events_after_start(all_events, day_range[0])?;
-
-        // Collection complete: display the results based on user preference
+        let current = store.get_current_task()?;
+        let all_events = store.fetch_events()?;
+        let intervals = Self::filter_events_in_range(all_events, day_range[0])?;
 
         if self.raw {
-            Self::log_raw(&events);
+            Self::log_raw(&intervals);
         } else if self.json {
-            Self::log_json(&events);
+            Self::log_json(&intervals);
         } else {
-            Self::log_table(&events, &day_range);
+            Self::log_table(&intervals, current.as_ref(), &day_range);
         }
 
         Ok(())
     }
 
     fn compute_day_range(&self, offset: UtcOffset) -> Vec<OffsetDateTime> {
-        // Truncate the current time to the start of the day and determine what day to start
-        // collecting events from. Map it to offset time so that the keys match against the events
-        // from the timer log.
-
         let today = OffsetDateTime::now_utc()
             .to_offset(offset)
             .truncate_to_day();
-
-        // Figure out how many days to go back based on what the user configured
 
         let days = if let Some(d) = self.days {
             d
@@ -97,97 +81,65 @@ impl CommandLog {
 
         let start_day = today - Duration::days(days_to_go_back);
 
-        // Build the range of days we are interested in
-
         (0..=days_to_go_back)
             .map(|i| start_day + Duration::days(i))
             .collect()
     }
 
-    /// Filters all fetched timer log events so that we only have to work with the set of events
-    /// that occured on or before the provided start day.
-    ///
-    /// The events timestamps are adjusted to local time using the same offset as the start time.
-    ///
-    fn filter_events_after_start(
-        all_events: TimerEventIterator,
+    fn filter_events_in_range(
+        all_events: PersistedEventIterator,
         start: OffsetDateTime,
-    ) -> Result<Vec<TimerEvent>> {
-        // Collect events in start/stop pairs and filter based on all events that stopped within
-        // the window.
-
-        let mut events = Vec::new();
-
-        let mut last_start = None;
+    ) -> Result<Vec<TimeInterval>> {
+        let mut intervals = Vec::new();
 
         for fetch_result in all_events {
             match fetch_result {
-                Ok(event) => {
-                    let offset_event = event.to_local(start.offset());
-
-                    match offset_event.action {
-                        TimerAction::Start => {
-                            if last_start.is_some() {
-                                bail!(
-                                    "corrupt timelog: two consecutive start events for {}",
-                                    offset_event.task
-                                );
-                            }
-
-                            last_start = Some(offset_event);
-                        }
-
-                        TimerAction::Stop => {
-                            if let Some(start_event) = last_start.take() {
-                                if offset_event.timestamp >= start {
-                                    events.push(start_event);
-                                    events.push(offset_event);
-                                }
-                            } else {
-                                warn!("found STOP event without matching START: {offset_event}");
-                            }
-                        }
+                Ok(StoreEvent::CreateInterval(interval)) => {
+                    let local_end = interval.end.to_offset(start.offset());
+                    if local_end >= start {
+                        intervals.push(interval);
                     }
                 }
-
-                Err(e) => bail!("failed to fetch timer events from log: {e}"),
+                Err(e) => bail!("failed to fetch events from log: {e}"),
             }
         }
 
-        // Edge case: if the last event is a start (in current task) but it started on a day that
-        // is outside of our current window, we need to include that information in the list we give
-        // back so it shows up in the table.
-
-        if let Some(start_event) = last_start {
-            events.push(start_event);
-        }
-
-        Ok(events)
+        Ok(intervals)
     }
 
-    /// Logs all the events in the same format as the in and out commands, one per line.
-    ///
-    fn log_raw(events: &[TimerEvent]) {
-        for ev in events {
-            println!("{ev}");
-        }
-    }
-
-    /// Logs all the events in JSONL format, one JSON record per line.
-    ///
-    fn log_json(events: &[TimerEvent]) {
-        for ev in events {
-            println!("{}", serde_json::to_string(&ev).unwrap());
+    fn log_raw(intervals: &[TimeInterval]) {
+        let offset = UtcOffset::current_local_offset().unwrap();
+        let fmt = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+        for interval in intervals {
+            let local = interval.to_local(offset);
+            let start = local.start.format(fmt).unwrap();
+            let end = local.end.format(fmt).unwrap();
+            let dur = local.end - local.start;
+            println!(
+                "{} {} - {} ({:02}:{:02})",
+                local.task,
+                start,
+                end,
+                dur.whole_hours(),
+                dur.whole_minutes() % 60
+            );
         }
     }
 
-    /// Logs all the events in a table format with one row for each task and a column for each day
-    /// in the requested range.
-    ///
-    /// The events should already be filtered so that they fit inside the day range.
-    ///
-    fn log_table(events: &[TimerEvent], day_range: &[OffsetDateTime]) {
-        if events.is_empty() {
+    fn log_json(intervals: &[TimeInterval]) {
+        for interval in intervals {
+            let event = StoreEvent::CreateInterval(interval.clone());
+            println!("{}", serde_json::to_string(&event).unwrap());
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn log_table(
+        intervals: &[TimeInterval],
+        current: Option<&CurrentTask>,
+        day_range: &[OffsetDateTime],
+    ) {
+        if intervals.is_empty() && current.is_none() {
             println!();
             println!("No events in time log window: use `kt in` and `kt out` to track your time");
             println!();
@@ -195,13 +147,19 @@ impl CommandLog {
             return;
         }
 
-        let event_table = Self::build_table(events, day_range);
+        let interval_table = Self::build_table(intervals, current, day_range);
+
+        if interval_table.day_durations_by_task.is_empty() {
+            println!();
+            println!("No events in time log window: use `kt in` and `kt out` to track your time");
+            println!();
+
+            return;
+        }
 
         let show_multiday_totals = day_range.len() > 1;
 
         let mut builder = Builder::new();
-
-        // Build the header first row (days of week)
 
         let mut header = vec![String::new()];
 
@@ -215,8 +173,6 @@ impl CommandLog {
         }
 
         builder.push_record(header);
-
-        // Build the header second row (tasks and dates)
 
         let mut header = vec!["TASK".bold().to_string()];
 
@@ -235,17 +191,16 @@ impl CommandLog {
 
         builder.push_record(header);
 
-        // Build the rows. We keep track of the per-task total, per-day total, and the overal total
-        // so we can display them for the user to let them know total time spent on everything.
         let mut day_totals: Vec<Duration> = vec![Duration::ZERO; day_range.len()];
         let mut total = Duration::ZERO;
 
-        for (task, day_durations) in event_table.day_durations_by_task {
-            let task_name = if event_table
+        for (task, day_durations) in &interval_table.day_durations_by_task {
+            let is_current = interval_table
                 .current_task
-                .as_ref()
-                .is_some_and(|c| c.task == task)
-            {
+                .as_deref()
+                .is_some_and(|c| c == task);
+
+            let task_name = if is_current {
                 task.clone().green().to_string()
             } else {
                 task.clone()
@@ -255,18 +210,16 @@ impl CommandLog {
 
             let mut task_total = Duration::ZERO;
 
-            for (i, (day, dur)) in day_durations.iter().enumerate() {
+            for (i, (_day, dur)) in day_durations.iter().enumerate() {
                 task_total += *dur;
                 total += *dur;
                 day_totals[i] += *dur;
 
-                let cur_task_color = event_table.current_task.as_ref().and_then(|t| {
-                    if t.task == task && t.timestamp.truncate_to_day() == *day {
-                        Some(Color::Green)
-                    } else {
-                        None
-                    }
-                });
+                let cur_task_color = if is_current && !dur.is_zero() {
+                    Some(Color::Green)
+                } else {
+                    None
+                };
 
                 row.push(Self::format_duration(dur, cur_task_color));
             }
@@ -284,8 +237,8 @@ impl CommandLog {
 
         let mut footer = vec!["TOTAL".italic().to_string()];
 
-        for dur in day_totals {
-            footer.push(Self::format_duration(&dur, None).italic().to_string());
+        for dur in &day_totals {
+            footer.push(Self::format_duration(dur, None).italic().to_string());
         }
 
         if show_multiday_totals {
@@ -305,115 +258,107 @@ impl CommandLog {
         println!();
         println!("{table}");
 
-        if let Some(c) = event_table.current_task {
+        if let Some(cur) = current
+            && let Ok(start) = OffsetDateTime::from_unix_timestamp(cur.start)
+        {
+            let offset = day_range[0].offset();
+            let local_start = start
+                .to_offset(offset)
+                .format(&format_description!(
+                    "[year]-[month]-[day] [hour]:[minute]:[second]"
+                ))
+                .unwrap();
             println!();
-            println!("{}", format!(" current: {c:#}").green());
+            println!(
+                "{}",
+                format!(" current: {} (started {})", cur.task, local_start).green()
+            );
         }
         println!();
     }
 
-    fn build_table(events: &[TimerEvent], day_range: &[OffsetDateTime]) -> TimerEventTable {
-        // Build up a template map that we will clone for each task we find in our timer events.
-        // The map is used to store the accumulated durations for each day in the window of time we
-        // are interested in.
-
+    fn build_table(
+        intervals: &[TimeInterval],
+        current: Option<&CurrentTask>,
+        day_range: &[OffsetDateTime],
+    ) -> IntervalTable {
         let day_durations_template: BTreeMap<OffsetDateTime, Duration> = day_range
             .iter()
             .map(|ts| (*ts, Duration::new(0, 0)))
             .collect();
 
-        // Build up a map of days to tasks and durations for that day. This is the information
-        // we will ultimately print out to the console.
         let mut day_durations_by_task: BTreeMap<String, BTreeMap<OffsetDateTime, Duration>> =
             BTreeMap::new();
 
-        // Keep track of the last time we saw a start for a task so we can compute the duration.
-        let mut current_task: Option<TimerEvent> = None;
+        let offset = day_range[0].offset();
 
-        // Populate the map
-        for event in events {
-            match event.action {
-                TimerAction::Start => {
-                    current_task = Some(event.clone());
-                }
-
-                TimerAction::Stop => {
-                    if let Some(start) = current_task.take() {
-                        Self::update_table(
-                            &start,
-                            event,
-                            &mut day_durations_by_task,
-                            &day_durations_template,
-                        );
-                    } else {
-                        warn!("found STOP event without matching START after filter: {event}");
-                    }
-                }
-            }
-        }
-
-        // Add in the current task duration if there is one. Also make sure to span multiple
-        // days if rollover happens.
-
-        if let Some(cur) = current_task.as_ref() {
+        for interval in intervals {
+            let local = interval.to_local(offset);
             Self::update_table(
-                cur,
-                &TimerEvent::stop(cur.task.clone()).to_local(day_range[0].offset()),
+                local.start,
+                local.end,
+                &local.task,
                 &mut day_durations_by_task,
                 &day_durations_template,
             );
         }
 
-        TimerEventTable {
+        let current_task_name = if let Some(cur) = current {
+            if let Ok(start) = OffsetDateTime::from_unix_timestamp(cur.start) {
+                let local_start = start.to_offset(offset);
+                let local_end = OffsetDateTime::now_utc()
+                    .to_offset(offset)
+                    .truncate_to_second();
+                Self::update_table(
+                    local_start,
+                    local_end,
+                    &cur.task,
+                    &mut day_durations_by_task,
+                    &day_durations_template,
+                );
+            }
+            Some(cur.task.clone())
+        } else {
+            None
+        };
+
+        IntervalTable {
             day_durations_by_task,
-            current_task,
+            current_task: current_task_name,
         }
     }
 
     fn update_table(
-        start: &TimerEvent,
-        stop: &TimerEvent,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+        task: &str,
         day_durations_by_task: &mut BTreeMap<String, BTreeMap<OffsetDateTime, Duration>>,
         day_durations_template: &BTreeMap<OffsetDateTime, Duration>,
     ) {
-        // NOTE: We aren't going to handle the case where stop time is before the start time. If
-        // that happens the log is corrupted and needs to be manually resolved before this command
-        // will work. Maybe in the future we can try and make the tool rich enough to help the user
-        // identify and fix these entries, but for now we will just assume they don't happen.
-
-        // We need to make sure the start fits inside our window (this applies for an edge case
-        // where the current task started on a day outside the window)
-
         let day_range_start = day_durations_template
             .keys()
             .next()
             .expect("missing days in template");
 
-        // If the timer log entry spans multiple days, we need to add time to each
-        // day appropriately.
-
-        let mut cur_start = start.timestamp;
-
+        let mut cur_start = start;
         let mut start_day = cur_start.truncate_to_day();
-        let stop_day = stop.timestamp.truncate_to_day();
+        let stop_day = end.truncate_to_day();
 
         while start_day <= stop_day {
             let next_day = start_day + Duration::DAY;
             let dur_to_next_day = next_day - cur_start;
-
-            let cur_dur_remaining = stop.timestamp - cur_start;
-
+            let cur_dur_remaining = end - cur_start;
             let dur = dur_to_next_day.min(cur_dur_remaining);
 
             if start_day >= *day_range_start {
-                match day_durations_by_task.get_mut(&stop.task) {
+                match day_durations_by_task.get_mut(task) {
                     None => {
                         let mut day_durations = day_durations_template.clone();
                         let day_dur = day_durations
                             .get_mut(&start_day)
                             .expect("missing day when cloning template");
                         *day_dur = dur;
-                        day_durations_by_task.insert(stop.task.clone(), day_durations);
+                        day_durations_by_task.insert(task.to_string(), day_durations);
                     }
 
                     Some(day_durations) => {
@@ -441,14 +386,7 @@ impl CommandLog {
     }
 }
 
-/// The result of building the table to display from a filtered view of timer events.
-///
-struct TimerEventTable {
-    /// A map of task name to a map of days/durations for each task that has a definitive start
-    /// and stop and thus was able to contribute to the duration.
+struct IntervalTable {
     day_durations_by_task: BTreeMap<String, BTreeMap<OffsetDateTime, Duration>>,
-
-    /// A map of any tasks that ended on a start event with no stop event. There should only ever
-    /// be one. If there are more then it indicates the data may be corrupted.
-    current_task: Option<TimerEvent>,
+    current_task: Option<String>,
 }

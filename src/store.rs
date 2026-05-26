@@ -2,7 +2,6 @@
 
 //! Defines how to access the store of data tracked by Kimai Timer.
 
-use core::fmt::Display;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::BufReader;
@@ -12,7 +11,6 @@ use anyhow::{Result, anyhow, bail};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::JsonLinesIter;
-use time::macros::format_description;
 use time::{OffsetDateTime, UtcOffset};
 
 pub struct Store {
@@ -50,21 +48,22 @@ impl Store {
         })
     }
 
-    pub fn append_timer_event(&self, event: TimerEvent) -> Result<()> {
+    pub fn append_interval(&self, interval: TimeInterval) -> Result<()> {
         Self::touch_file(&self.timelog)?;
 
+        let event = StoreEvent::CreateInterval(interval);
         serde_jsonlines::append_json_lines(&self.timelog, &[event])
-            .map_err(|e| anyhow!("failed to write time event to timelog: {e}"))?;
+            .map_err(|e| anyhow!("failed to write interval event to timelog: {e}"))?;
         Ok(())
     }
 
-    pub fn fetch_timer_events(&self) -> Result<TimerEventIterator> {
+    pub fn fetch_events(&self) -> Result<PersistedEventIterator> {
         Self::touch_file(&self.timelog)?;
 
         let lines_iter = serde_jsonlines::json_lines(&self.timelog)
             .map_err(|e| anyhow!("failed to read timelog: {e}"))?;
 
-        Ok(TimerEventIterator { inner: lines_iter })
+        Ok(PersistedEventIterator { inner: lines_iter })
     }
 
     pub fn add_task(&self, task: impl Into<String>) -> Result<()> {
@@ -102,22 +101,30 @@ impl Store {
         Ok(tasks)
     }
 
-    pub fn get_current_task(&self) -> Result<Option<String>> {
-        let current = Self::read_file(&self.current_task)?;
+    pub fn get_current_task(&self) -> Result<Option<CurrentTask>> {
+        let contents = Self::read_file(&self.current_task)?;
 
-        if current.is_empty() {
+        if contents.is_empty() {
             Ok(None)
         } else {
+            let current = serde_json::from_str(&contents)
+                .map_err(|e| anyhow!("failed to parse current task: {e}"))?;
             Ok(Some(current))
         }
     }
 
-    pub fn set_current_task(&self, task: &str) -> Result<()> {
-        Self::write_file(&self.current_task, task)
+    pub fn set_current_task(&self, task: &str, start: i64) -> Result<()> {
+        let current = CurrentTask {
+            task: task.to_string(),
+            start,
+        };
+        let contents = serde_json::to_string(&current)
+            .map_err(|e| anyhow!("failed to serialize current task: {e}"))?;
+        Self::write_file(&self.current_task, &contents)
     }
 
     pub fn clear_current_task(&self) -> Result<()> {
-        self.set_current_task("")
+        Self::write_file(&self.current_task, "")
     }
 
     pub fn get_last_task(&self) -> Result<Option<String>> {
@@ -169,110 +176,64 @@ impl Store {
     }
 }
 
-pub struct TimerEventIterator {
-    inner: JsonLinesIter<BufReader<File>, TimerEvent>,
+pub struct PersistedEventIterator {
+    inner: JsonLinesIter<BufReader<File>, StoreEvent>,
 }
 
-impl Iterator for TimerEventIterator {
-    type Item = Result<TimerEvent, std::io::Error>;
+impl Iterator for PersistedEventIterator {
+    type Item = Result<StoreEvent, std::io::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-pub struct TimerEvent {
-    pub action: TimerAction,
-    #[serde(with = "time::serde::timestamp")]
-    pub timestamp: OffsetDateTime,
-    pub task: String,
+/// An event stored in the append-only timelog.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum StoreEvent {
+    CreateInterval(TimeInterval),
 }
 
-impl TimerEvent {
-    pub fn start(task: impl Into<String>) -> Self {
-        Self {
-            action: TimerAction::Start,
-            timestamp: OffsetDateTime::now_utc().truncate_to_second(),
-            task: task.into(),
-        }
-    }
+/// An atomic unit of time spent on a task, with a definite start and end.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TimeInterval {
+    pub id: String,
+    #[serde(with = "time::serde::timestamp")]
+    pub created_at: OffsetDateTime,
+    pub task: String,
+    #[serde(with = "time::serde::timestamp")]
+    pub start: OffsetDateTime,
+    #[serde(with = "time::serde::timestamp")]
+    pub end: OffsetDateTime,
+}
 
-    pub fn stop(task: impl Into<String>) -> Self {
+impl TimeInterval {
+    pub fn new(task: impl Into<String>, start: OffsetDateTime, end: OffsetDateTime) -> Self {
         Self {
-            action: TimerAction::Stop,
-            timestamp: OffsetDateTime::now_utc().truncate_to_second(),
+            id: uuid::Uuid::new_v4().to_string(),
+            created_at: OffsetDateTime::now_utc().truncate_to_second(),
             task: task.into(),
+            start,
+            end,
         }
     }
 
     pub fn to_local(&self, offset: UtcOffset) -> Self {
         Self {
-            action: self.action,
-            timestamp: self.timestamp.to_offset(offset),
+            id: self.id.clone(),
+            created_at: self.created_at.to_offset(offset),
             task: self.task.clone(),
+            start: self.start.to_offset(offset),
+            end: self.end.to_offset(offset),
         }
     }
 }
 
-impl Display for TimerEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if f.alternate() {
-            write!(
-                f,
-                "{} ({:#} {})",
-                self.task,
-                self.action,
-                self.timestamp
-                    .to_offset(UtcOffset::current_local_offset().unwrap())
-                    .format(&format_description!(
-                        "[year]-[month]-[day] [hour]:[minute]:[second]"
-                    ))
-                    .unwrap()
-            )
-        } else {
-            write!(
-                f,
-                "{} {} @ {}",
-                self.action,
-                self.task,
-                self.timestamp
-                    .to_offset(UtcOffset::current_local_offset().unwrap())
-                    .format(&format_description!(
-                        "[year]-[month]-[day] [hour]:[minute]:[second]"
-                    ))
-                    .unwrap()
-            )
-        }
-    }
-}
-
-#[derive(Clone, Copy, Deserialize, Serialize)]
-pub enum TimerAction {
-    Start,
-    Stop,
-}
-
-impl Display for TimerAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if f.alternate() {
-            write!(
-                f,
-                "{}",
-                match self {
-                    Self::Start => "started",
-                    Self::Stop => "stopped",
-                }
-            )
-        } else {
-            write!(
-                f,
-                "{}",
-                match self {
-                    Self::Start => "START",
-                    Self::Stop => "STOP ",
-                }
-            )
-        }
-    }
+/// The state of the currently-running task, persisted to the `current` file as JSON.
+#[derive(Serialize, Deserialize)]
+pub struct CurrentTask {
+    pub task: String,
+    /// UNIX timestamp of when the task was started.
+    pub start: i64,
 }

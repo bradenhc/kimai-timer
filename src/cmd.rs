@@ -4,6 +4,7 @@
 //!
 //! Each command is implemented inside of a submodule for maintainability.
 
+mod add;
 mod r#in;
 mod list;
 mod log;
@@ -11,6 +12,7 @@ mod new;
 mod out;
 mod switch;
 
+pub use add::CommandAdd;
 pub use r#in::CommandIn;
 pub use list::CommandList;
 pub use log::CommandLog;
