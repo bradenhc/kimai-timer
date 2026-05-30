@@ -1,6 +1,6 @@
 [package]
 name = "kimai-timer"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Seriously Simple Time Tracker"
 license = "MIT"
@@ -27,6 +27,10 @@ time = { version = "0.3.47", features = ["formatting", "local-offset", "macros",
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"
 
 [lints.clippy]
 pedantic = "warn"

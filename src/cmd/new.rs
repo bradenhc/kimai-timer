@@ -22,12 +22,10 @@ pub struct CommandNew {
 impl CommandNew {
     /// Validates and persists the new task alias, failing if the name is already in use.
     ///
-    pub fn execute(self) -> Result<()> {
+    pub fn execute(self, store: &Store) -> Result<()> {
         if self.task.is_empty() {
             bail!("task name cannot be empty");
         }
-
-        let store = Store::new()?;
 
         let tasks = store.get_tasks()?;
 

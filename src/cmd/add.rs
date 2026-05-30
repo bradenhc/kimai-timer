@@ -26,9 +26,7 @@ pub struct CommandAdd {
 impl CommandAdd {
     /// Runs the add flow: selects a task, prompts for start/stop date+time, and saves the interval.
     ///
-    #[allow(clippy::unused_self)]
-    pub fn execute(self) -> Result<()> {
-        let store = Store::new()?;
+    pub fn execute(self, store: &Store) -> Result<()> {
         let tasks = store.get_tasks()?;
 
         let task = match self.task {

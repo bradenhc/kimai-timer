@@ -21,9 +21,7 @@ impl CommandSwitch {
     /// Punches in to the last task, which implicitly punches out of the current one.
     ///
     #[allow(clippy::unused_self)]
-    pub fn execute(self) -> Result<()> {
-        let store = Store::new()?;
-
+    pub fn execute(self, store: &Store) -> Result<()> {
         let current_task = store.get_current_task()?;
         if current_task.is_none() {
             bail!("no current task to switch from");
@@ -31,7 +29,7 @@ impl CommandSwitch {
 
         let last_task = store.get_last_task()?;
         if let Some(last) = last_task {
-            CommandIn::for_task(last).execute()
+            CommandIn::for_task(last).execute(store)
         } else {
             bail!("no last task to switch to");
         }

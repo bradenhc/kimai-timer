@@ -37,9 +37,7 @@ impl CommandIn {
 
     /// Punches in to the resolved task, auto-punching out of any active task first if needed.
     ///
-    pub fn execute(self) -> Result<()> {
-        let store = Store::new()?;
-
+    pub fn execute(self, store: &Store) -> Result<()> {
         let tasks = store.get_tasks()?;
         let current_task = store.get_current_task()?;
 
@@ -84,7 +82,7 @@ impl CommandIn {
                     }
 
                     // Switching tasks: punch out of the current one
-                    CommandOut {}.execute()?;
+                    CommandOut {}.execute(store)?;
                 }
                 task
             }

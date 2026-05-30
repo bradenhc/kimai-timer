@@ -21,9 +21,7 @@ impl CommandList {
     /// Prints all tasks, marking the active one with `*` and the last completed one with `-`.
     ///
     #[allow(clippy::unused_self)]
-    pub fn execute(self) -> Result<()> {
-        let store = Store::new()?;
-
+    pub fn execute(self, store: &Store) -> Result<()> {
         let tasks = store.get_tasks()?;
 
         if tasks.is_empty() {

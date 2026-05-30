@@ -8,6 +8,7 @@
 //!
 //! See the repo README for more details.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
@@ -18,6 +19,8 @@ use tracing::error;
 mod cmd;
 mod store;
 mod trace;
+
+use store::Store;
 
 /// Removes all styles from the command-line help text to keep things simple.
 const STYLES: Styles = Styles::styled().usage(Style::new());
@@ -77,6 +80,10 @@ const TERM_WIDTH: usize = 80;
     version
 )]
 pub struct CliConfig {
+    /// Override the directory used to store kt data files. Also configurable via `KT_DATA_DIR`.
+    #[arg(long, global = true, env = "KT_DATA_DIR")]
+    data_dir: Option<PathBuf>,
+
     /// The subcommand to execute.
     #[clap(subcommand)]
     command: Command,
@@ -125,19 +132,24 @@ fn main() -> ExitCode {
     }
 }
 
-/// Parses CLI arguments and dispatches to the appropriate subcommand handler.
+/// Parses CLI arguments, builds the store, and dispatches to the appropriate subcommand handler.
 fn run_main() -> Result<()> {
     let config = CliConfig::parse();
 
     trace::init();
 
+    let store = match config.data_dir {
+        Some(dir) => Store::new(&dir)?,
+        None => Store::with_project_dir()?,
+    };
+
     match config.command {
-        Command::Add(cmd) => cmd.execute(),
-        Command::List(cmd) => cmd.execute(),
-        Command::Log(cmd) => cmd.execute(),
-        Command::In(cmd) => cmd.execute(),
-        Command::New(cmd) => cmd.execute(),
-        Command::Out(cmd) => cmd.execute(),
-        Command::Switch(cmd) => cmd.execute(),
+        Command::Add(cmd) => cmd.execute(&store),
+        Command::List(cmd) => cmd.execute(&store),
+        Command::Log(cmd) => cmd.execute(&store),
+        Command::In(cmd) => cmd.execute(&store),
+        Command::New(cmd) => cmd.execute(&store),
+        Command::Out(cmd) => cmd.execute(&store),
+        Command::Switch(cmd) => cmd.execute(&store),
     }
 }
