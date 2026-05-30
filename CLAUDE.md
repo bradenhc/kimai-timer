@@ -20,7 +20,7 @@ See @README.md for more overview/design/usage information.
 
 ## Toolchain
 
-- Rust 1.95 or newer
+- Rust 1.95
 - Rust Edition 2024
 
 ## Commands
@@ -42,7 +42,6 @@ See @README.md for more overview/design/usage information.
 - Use `cargo fmt` to format Rust code (after every update)
 - use `dprint` to format markdown files
 - Prefer stateless functions over stateful struct methods, but keep code simple
-- Put `use` imports from same crate on different lines if in different modules
 
 ## Important Notes
 
