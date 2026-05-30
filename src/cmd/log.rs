@@ -54,12 +54,11 @@ pub struct CommandLog {
 
 impl CommandLog {
     /// Fetches events from the store, filters to the requested date window, and renders output.
-    pub fn execute(self) -> Result<()> {
+    pub fn execute(self, store: &Store) -> Result<()> {
         let offset = UtcOffset::current_local_offset().unwrap();
 
         let day_range = self.compute_day_range(offset);
 
-        let store = Store::new()?;
         let current = store.get_current_task()?;
         let all_events = store.fetch_events()?;
         let intervals = Self::filter_events_in_range(all_events, day_range[0])?;

@@ -34,33 +34,33 @@ pub struct Store {
 }
 
 impl Store {
-    /// Creates a `Store` by resolving the platform-appropriate data directory and ensuring it exists.
+    /// Creates a `Store` rooted at `data_dir`, creating it if it does not already exist.
     ///
-    pub fn new() -> Result<Self> {
-        let pdirs = ProjectDirs::from("codes", "hitchcock", "kimai-timer")
-            .ok_or_else(|| anyhow!("failed to derive project directory path"))?;
-
-        let path = pdirs.data_dir();
-        if !path.exists() {
-            std::fs::create_dir_all(path).map_err(|e| {
+    pub fn new(data_dir: &Path) -> Result<Self> {
+        if !data_dir.exists() {
+            std::fs::create_dir_all(data_dir).map_err(|e| {
                 anyhow!(
                     "failed to create project data directory: {}: {e}",
-                    path.display()
+                    data_dir.display()
                 )
             })?;
         }
 
-        let path_timelog = path.join("timelog.jsonl");
-        let path_taskset = path.join("taskset.json");
-        let path_current = path.join("current");
-        let path_last = path.join("last");
-
         Ok(Self {
-            timelog: path_timelog,
-            taskset: path_taskset,
-            current_task: path_current,
-            last_task: path_last,
+            timelog: data_dir.join("timelog.jsonl"),
+            taskset: data_dir.join("taskset.json"),
+            current_task: data_dir.join("current"),
+            last_task: data_dir.join("last"),
         })
+    }
+
+    /// Resolves the platform-appropriate data directory for this application and delegates to
+    /// [`Store::new`].
+    ///
+    pub fn with_project_dir() -> Result<Self> {
+        let pdirs = ProjectDirs::from("codes", "hitchcock", "kimai-timer")
+            .ok_or_else(|| anyhow!("failed to derive project directory path"))?;
+        Self::new(pdirs.data_dir())
     }
 
     /// Appends a `CreateInterval` event to the timelog.
@@ -302,4 +302,72 @@ pub struct CurrentTask {
 
     /// UNIX timestamp (seconds since epoch) of when the task was started.
     pub start: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn new_creates_directory_if_missing() {
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("a").join("b");
+        assert!(!nested.exists());
+        Store::new(&nested).unwrap();
+        assert!(nested.exists());
+    }
+
+    #[test]
+    fn add_and_get_tasks_roundtrip() {
+        let dir = tempdir().unwrap();
+        let store = Store::new(dir.path()).unwrap();
+        store.add_task("my-task").unwrap();
+        let tasks = store.get_tasks().unwrap();
+        assert!(tasks.contains("my-task"));
+    }
+
+    #[test]
+    fn set_and_get_current_task_roundtrip() {
+        let dir = tempdir().unwrap();
+        let store = Store::new(dir.path()).unwrap();
+        store.set_current_task("my-task", 1_000_000).unwrap();
+        let current = store.get_current_task().unwrap().unwrap();
+        assert_eq!(current.task, "my-task");
+        assert_eq!(current.start, 1_000_000);
+    }
+
+    #[test]
+    fn clear_current_task_returns_none() {
+        let dir = tempdir().unwrap();
+        let store = Store::new(dir.path()).unwrap();
+        store.set_current_task("my-task", 1_000_000).unwrap();
+        store.clear_current_task().unwrap();
+        assert!(store.get_current_task().unwrap().is_none());
+    }
+
+    #[test]
+    fn set_and_get_last_task_roundtrip() {
+        let dir = tempdir().unwrap();
+        let store = Store::new(dir.path()).unwrap();
+        store.set_last_task("my-task").unwrap();
+        let last = store.get_last_task().unwrap().unwrap();
+        assert_eq!(last, "my-task");
+    }
+
+    #[test]
+    fn append_and_fetch_interval_roundtrip() {
+        let dir = tempdir().unwrap();
+        let store = Store::new(dir.path()).unwrap();
+        let start = OffsetDateTime::from_unix_timestamp(1_000_000).unwrap();
+        let end = OffsetDateTime::from_unix_timestamp(1_003_600).unwrap();
+        let interval = TimeInterval::new("my-task", start, end);
+        let id = interval.id.clone();
+        store.append_interval(interval).unwrap();
+        let events: Vec<_> = store.fetch_events().unwrap().collect();
+        assert_eq!(events.len(), 1);
+        let StoreEvent::CreateInterval(fetched) = events[0].as_ref().unwrap().clone();
+        assert_eq!(fetched.id, id);
+        assert_eq!(fetched.task, "my-task");
+    }
 }

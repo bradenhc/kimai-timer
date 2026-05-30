@@ -23,9 +23,7 @@ impl CommandOut {
     /// Punches out of the current task, recording a completed interval to the timelog.
     ///
     #[allow(clippy::unused_self)]
-    pub fn execute(self) -> Result<()> {
-        let store = Store::new()?;
-
+    pub fn execute(self, store: &Store) -> Result<()> {
         match store.get_current_task()? {
             None => {
                 println!("No current task");
