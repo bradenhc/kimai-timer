@@ -33,11 +33,14 @@ See @README.md for more overview/design/usage information.
 
 ## Code Style
 
-- Doc comments should generally focus more on "why" and less on "what"
+- Doc comments should focus more on "why" and less on "what"
 - Add doc comments to every module summarizing purpose and key elements
-- Add concise doc comments to every struct (highlight purpose, how it fits in)
+- Add concise doc comments to every struct, enum, and function (summarize what,
+  highlight why and how it fits in)
 - Add concise doc comments to every public struct field (summarize what)
-- Add concise doc comments to every function (summarize what, highlight why)
+- Add empty doc comment line for doc comments on structs, enums, and functions
+  to improve readability
+- Separate struct fields with doc comments with newline to improve readability
 - Wrap comments at 100 columns
 - Use `cargo fmt` to format Rust code (after every update)
 - use `dprint` to format markdown files
