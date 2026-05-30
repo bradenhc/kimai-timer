@@ -1,5 +1,10 @@
 // Copyright (c) 2026 Braden Hitchcock - MIT License (see LICENSE file for details)
 
+//! Implements the `kt add` subcommand for manually inserting time intervals.
+//!
+//! Used primarily to amend missed or incorrectly tracked sessions. The command prompts for a task,
+//! start date/time, and stop date/time, then appends the resulting interval to the timelog.
+
 use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use colored::Colorize;
@@ -9,6 +14,8 @@ use time::{Date, OffsetDateTime, Time, UtcOffset};
 
 use crate::store::{Store, TimeInterval};
 
+/// Arguments for the `kt add` subcommand.
+///
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT_ARG, styles = crate::STYLES)]
 pub struct CommandAdd {
@@ -17,6 +24,8 @@ pub struct CommandAdd {
 }
 
 impl CommandAdd {
+    /// Runs the add flow: selects a task, prompts for start/stop date+time, and saves the interval.
+    ///
     #[allow(clippy::unused_self)]
     pub fn execute(self) -> Result<()> {
         let store = Store::new()?;
@@ -67,6 +76,8 @@ impl CommandAdd {
         Ok(())
     }
 
+    /// Displays a selection list of times in 6-minute increments and returns the chosen `HH:MM` string.
+    ///
     fn select_time(prompt: &str) -> Result<String> {
         let times = (0..1440)
             .step_by(6)
@@ -77,6 +88,8 @@ impl CommandAdd {
         Ok(start_time)
     }
 
+    /// Parses `date_str` and `time_str` into an `OffsetDateTime` at `offset`.
+    ///
     fn combine_date_time(
         date_str: &str,
         time_str: &str,

@@ -1,5 +1,11 @@
 // Copyright (c) 2026 Braden Hitchcock - MIT License (see LICENSE file for details)
 
+//! Implements the `kt in` subcommand for punching in to a task.
+//!
+//! If no task is specified, resumes the last punched-out task. If a different task is already
+//! active, it automatically punches out first. Uses fuzzy search to suggest similar task names
+//! when an unrecognized task is provided.
+
 use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use colored::Colorize;
@@ -10,6 +16,8 @@ use time::{OffsetDateTime, UtcOffset};
 use crate::cmd::CommandOut;
 use crate::store::Store;
 
+/// Arguments for the `kt in` subcommand.
+///
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT_ARG, styles = crate::STYLES)]
 pub struct CommandIn {
@@ -18,12 +26,17 @@ pub struct CommandIn {
 }
 
 impl CommandIn {
+    /// Constructs a `CommandIn` targeting `task` directly, bypassing interactive prompts.
+    ///
+    /// Used by [`crate::cmd::CommandSwitch`] to reuse the punch-in logic programmatically.
     pub fn for_task(task: impl Into<String>) -> Self {
         Self {
             task: Some(task.into()),
         }
     }
 
+    /// Punches in to the resolved task, auto-punching out of any active task first if needed.
+    ///
     pub fn execute(self) -> Result<()> {
         let store = Store::new()?;
 
