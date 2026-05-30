@@ -86,6 +86,10 @@ pub struct CliConfig {
 ///
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Add a new time event (primarily for amending missed events).
+    #[clap(visible_alias = "a")]
+    Add(cmd::CommandAdd),
+
     /// Lists the current set of tasks.
     #[clap(visible_alias = "ls")]
     List(cmd::CommandList),
@@ -111,6 +115,7 @@ pub enum Command {
     Switch(cmd::CommandSwitch),
 }
 
+/// Entry point: runs the application and maps any error to a non-zero exit code.
 fn main() -> ExitCode {
     if let Err(e) = run_main() {
         error!("{e}");
@@ -120,12 +125,14 @@ fn main() -> ExitCode {
     }
 }
 
+/// Parses CLI arguments and dispatches to the appropriate subcommand handler.
 fn run_main() -> Result<()> {
     let config = CliConfig::parse();
 
     trace::init();
 
     match config.command {
+        Command::Add(cmd) => cmd.execute(),
         Command::List(cmd) => cmd.execute(),
         Command::Log(cmd) => cmd.execute(),
         Command::In(cmd) => cmd.execute(),

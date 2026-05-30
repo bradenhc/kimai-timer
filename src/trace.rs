@@ -10,7 +10,8 @@ use tracing_subscriber::{
     registry::LookupSpan,
 };
 
-/// Custom formatter that prints simple, consistent log records for kt
+/// Custom formatter that prints simple, consistent log records for kt.
+///
 struct Formatter;
 
 impl<S, N> FormatEvent<S, N> for Formatter
@@ -18,6 +19,8 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
     N: for<'a> FormatFields<'a> + 'static,
 {
+    /// Formats a tracing event as `{level} {target}: {message}` with ANSI color applied to the level.
+    ///
     fn format_event(
         &self,
         ctx: &FmtContext<'_, S, N>,
@@ -44,6 +47,7 @@ where
 }
 
 /// Initializes the tracing subscriber used to print log records to the console.
+///
 pub fn init() {
     let subscriber = tracing_subscriber::fmt::Subscriber::builder()
         .event_format(Formatter)

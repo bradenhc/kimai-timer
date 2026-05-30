@@ -1,16 +1,25 @@
 // Copyright (c) 2026 Braden Hitchcock - MIT License (see LICENSE file for details)
 
+//! Implements the `kt switch` subcommand for toggling between the current and last tasks.
+//!
+//! Punches in to the previously completed task, which implicitly punches out of the active one
+//! via [`CommandIn`].
+
 use anyhow::{Result, bail};
 use clap::Parser;
 
 use crate::cmd::CommandIn;
 use crate::store::Store;
 
+/// Arguments for the `kt switch` subcommand (none currently required).
+///
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT_ARG, styles = crate::STYLES)]
 pub struct CommandSwitch {}
 
 impl CommandSwitch {
+    /// Punches in to the last task, which implicitly punches out of the current one.
+    ///
     #[allow(clippy::unused_self)]
     pub fn execute(self) -> Result<()> {
         let store = Store::new()?;
