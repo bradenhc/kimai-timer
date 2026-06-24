@@ -27,6 +27,7 @@ use crate::store::{
 ///
 /// Controls the date window and output format. At most one output format is active at a time;
 /// `--raw` and `--json` are mutually exclusive with the default table view.
+///
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT, styles = crate::STYLES)]
 #[allow(clippy::struct_excessive_bools)]
@@ -57,6 +58,7 @@ pub struct CommandLog {
 
 impl CommandLog {
     /// Fetches events from the store, filters to the requested date window, and renders output.
+    ///
     pub fn execute(self, store: &Store) -> Result<()> {
         let offset = UtcOffset::current_local_offset().unwrap();
 
@@ -82,6 +84,7 @@ impl CommandLog {
     /// The window length is resolved in priority order: `--days` > `--period` > `--week` > 1.
     /// Returns a `Vec` rather than a range so callers can index into it for column headers and
     /// template construction without re-evaluating the priority logic.
+    ///
     fn compute_day_range(&self, offset: UtcOffset) -> Vec<OffsetDateTime> {
         let today = OffsetDateTime::now_utc()
             .to_offset(offset)
@@ -112,6 +115,7 @@ impl CommandLog {
     /// Filtering by end time (rather than start time) ensures intervals that began before the
     /// window but finished inside it are still counted — a common occurrence for long-running
     /// tasks that span midnight.
+    ///
     fn filter_events_in_range(
         all_events: PersistedEventIterator,
         start: OffsetDateTime,
@@ -134,6 +138,7 @@ impl CommandLog {
     }
 
     /// Prints each interval as a single human-readable line: `<task> <start> - <end> (HH:MM)`.
+    ///
     fn log_raw(intervals: &[TimeInterval]) {
         let offset = UtcOffset::current_local_offset().unwrap();
         let fmt = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
@@ -157,6 +162,7 @@ impl CommandLog {
     ///
     /// Emitting the full `StoreEvent` envelope keeps the output compatible with the store's own
     /// event format, making it straightforward to pipe into other tools or re-import.
+    ///
     fn log_json(intervals: &[TimeInterval]) {
         for interval in intervals {
             let event = StoreEvent::CreateInterval(interval.clone());
@@ -170,6 +176,7 @@ impl CommandLog {
     /// empty. When the window spans more than one day, an extra TOTAL column is appended on the
     /// right for per-task and grand totals. The currently active task row and its non-zero cells
     /// are highlighted green to distinguish in-progress time from completed intervals.
+    ///
     #[allow(clippy::too_many_lines)]
     fn log_table(
         intervals: &[TimeInterval],
@@ -321,6 +328,7 @@ impl CommandLog {
     /// Pre-populates every task row with zero-duration entries for each day using
     /// `day_durations_template`, so days with no activity print as `00:00` rather than being
     /// absent from the table. The in-progress task is included by treating "now" as its end time.
+    ///
     fn build_table(
         intervals: &[TimeInterval],
         current: Option<&CurrentTask>,
@@ -377,6 +385,7 @@ impl CommandLog {
     /// Intervals that cross midnight are split so each calendar day receives only the portion of
     /// work that falls within it. Days before the template's earliest key are skipped — they are
     /// outside the display window but can appear when a task was started before the window opened.
+    ///
     fn update_table(
         start: OffsetDateTime,
         end: OffsetDateTime,
@@ -427,6 +436,7 @@ impl CommandLog {
     /// Formats a `Duration` as `HH:MM`, optionally applying a terminal color.
     ///
     /// Uses whole hours and remaining minutes so 90 minutes prints as `01:30`, not `00:90`.
+    ///
     fn format_duration(dur: &Duration, color: Option<Color>) -> String {
         let s = format!("{:02}:{:02}", dur.whole_hours(), dur.whole_minutes() % 60);
 
@@ -441,9 +451,11 @@ impl CommandLog {
 /// Intermediate aggregation produced by `build_table` and consumed by `log_table`.
 ///
 /// Keeps tasks in sorted order via `BTreeMap` so table rows are stable across runs.
+///
 struct IntervalTable {
     /// Per-task map of day-start timestamps to the accumulated duration for that day.
     day_durations_by_task: BTreeMap<String, BTreeMap<OffsetDateTime, Duration>>,
+
     /// Name of the currently running task, if any; used to apply green highlighting in the table.
     current_task: Option<String>,
 }

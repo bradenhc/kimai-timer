@@ -310,7 +310,7 @@ pub struct CurrentTask {
 /// the stored timestamps are never affected. Configuration of the active mode is deferred to
 /// a later PR; callers that want the default should use `RoundingMode::default()`.
 ///
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum RoundingMode {
     /// Round up to the nearest 36 seconds (= 0.01 hours).
     ///
@@ -348,7 +348,10 @@ impl TaskDuration {
 
     /// Returns the unmodified accumulated duration.
     ///
-    /// Unused until callers (e.g. `--raw` reporting paths) are wired up.
+    /// Unused until callers (e.g. `--raw` reporting paths) are wired up. We haven't hooked it up
+    /// yet because that logic does not yet use the `TaskDuration` type. Once the `Store` exposes
+    /// a function to get `TaskDuration` objects, we can make that update.
+    ///
     #[allow(dead_code)]
     pub fn raw(&self) -> Duration {
         self.raw
@@ -358,6 +361,7 @@ impl TaskDuration {
     ///
     /// Both modes use ceiling rounding: if the duration falls exactly on a boundary it is
     /// returned unchanged; otherwise it is snapped to the next boundary above it.
+    ///
     pub fn rounded(&self, mode: &RoundingMode) -> Duration {
         let secs = self.raw.whole_seconds();
         let boundary: i64 = match mode {
