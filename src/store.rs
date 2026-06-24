@@ -15,7 +15,7 @@ use anyhow::{Result, anyhow, bail};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::JsonLinesIter;
-use time::{OffsetDateTime, UtcOffset};
+use time::{Duration, OffsetDateTime, UtcOffset};
 
 /// Manages access to all persisted state for the Kimai Timer application.
 ///
@@ -304,6 +304,75 @@ pub struct CurrentTask {
     pub start: i64,
 }
 
+/// Controls how an aggregated task duration is snapped upward for reporting.
+///
+/// Rounding is applied after all intervals for a task on a given day have been summed, so
+/// the stored timestamps are never affected. Configuration of the active mode is deferred to
+/// a later PR; callers that want the default should use `RoundingMode::default()`.
+///
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum RoundingMode {
+    /// Round up to the nearest 36 seconds (= 0.01 hours).
+    ///
+    /// Guarantees the displayed value is an exact multiple of 0.01 h, so
+    /// `displayed_duration × hourly_rate` never produces a repeating decimal.
+    #[default]
+    Decimal,
+
+    /// Round up to the nearest `n` minutes.
+    ///
+    /// The inner value is the granularity in minutes. Kimai recommends 3 as a starting point
+    /// (3 min = 0.05 h), keeping invoice math clean without over-rounding short tasks.
+    /// Unused until the config PR wires up mode selection.
+    #[allow(dead_code)]
+    Classic(u32),
+}
+
+/// The aggregated true duration for a single task on a single day, with rounding support.
+///
+/// Constructed from the already-accumulated raw [`Duration`] for a task/day bucket. Holds the
+/// unmodified value and exposes [`TaskDuration::rounded`] to obtain the display-ready value
+/// without altering the underlying data.
+///
+pub struct TaskDuration {
+    /// The exact sum of all interval durations for this task on this day.
+    raw: Duration,
+}
+
+impl TaskDuration {
+    /// Wraps `raw` without modification.
+    ///
+    pub fn new(raw: Duration) -> Self {
+        Self { raw }
+    }
+
+    /// Returns the unmodified accumulated duration.
+    ///
+    /// Unused until callers (e.g. `--raw` reporting paths) are wired up.
+    #[allow(dead_code)]
+    pub fn raw(&self) -> Duration {
+        self.raw
+    }
+
+    /// Returns the duration rounded up to the next boundary defined by `mode`.
+    ///
+    /// Both modes use ceiling rounding: if the duration falls exactly on a boundary it is
+    /// returned unchanged; otherwise it is snapped to the next boundary above it.
+    pub fn rounded(&self, mode: &RoundingMode) -> Duration {
+        let secs = self.raw.whole_seconds();
+        let boundary: i64 = match mode {
+            RoundingMode::Decimal => 36,
+            RoundingMode::Classic(n) => i64::from(*n) * 60,
+        };
+        let remainder = secs % boundary;
+        if remainder == 0 {
+            Duration::seconds(secs)
+        } else {
+            Duration::seconds(secs + boundary - remainder)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +422,54 @@ mod tests {
         store.set_last_task("my-task").unwrap();
         let last = store.get_last_task().unwrap().unwrap();
         assert_eq!(last, "my-task");
+    }
+
+    #[test]
+    fn task_duration_rounded_decimal_zero() {
+        let td = TaskDuration::new(Duration::ZERO);
+        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::ZERO);
+    }
+
+    #[test]
+    fn task_duration_rounded_decimal_exact_boundary() {
+        let td = TaskDuration::new(Duration::seconds(72));
+        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::seconds(72));
+    }
+
+    #[test]
+    fn task_duration_rounded_decimal_one_over_boundary() {
+        let td = TaskDuration::new(Duration::seconds(73));
+        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::seconds(108));
+    }
+
+    #[test]
+    fn task_duration_rounded_decimal_just_under_boundary() {
+        let td = TaskDuration::new(Duration::seconds(35));
+        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::seconds(36));
+    }
+
+    #[test]
+    fn task_duration_rounded_classic_zero() {
+        let td = TaskDuration::new(Duration::ZERO);
+        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::ZERO);
+    }
+
+    #[test]
+    fn task_duration_rounded_classic_exact_boundary() {
+        let td = TaskDuration::new(Duration::minutes(6));
+        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::minutes(6));
+    }
+
+    #[test]
+    fn task_duration_rounded_classic_one_second_over_boundary() {
+        let td = TaskDuration::new(Duration::seconds(181));
+        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::minutes(6));
+    }
+
+    #[test]
+    fn task_duration_rounded_classic_just_under_boundary() {
+        let td = TaskDuration::new(Duration::seconds(179));
+        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::minutes(3));
     }
 
     #[test]

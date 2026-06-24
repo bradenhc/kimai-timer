@@ -18,7 +18,10 @@ use tabled::settings::Style;
 use time::macros::format_description;
 use time::{Duration, OffsetDateTime, UtcOffset};
 
-use crate::store::{CurrentTask, PersistedEventIterator, Store, StoreEvent, TimeInterval};
+use crate::store::{
+    CurrentTask, PersistedEventIterator, RoundingMode, Store, StoreEvent, TaskDuration,
+    TimeInterval,
+};
 
 /// Arguments and flags for the `kt log` subcommand.
 ///
@@ -245,9 +248,10 @@ impl CommandLog {
             let mut task_total = Duration::ZERO;
 
             for (i, (_day, dur)) in day_durations.iter().enumerate() {
-                task_total += *dur;
-                total += *dur;
-                day_totals[i] += *dur;
+                let rounded = TaskDuration::new(*dur).rounded(&RoundingMode::default());
+                task_total += rounded;
+                total += rounded;
+                day_totals[i] += rounded;
 
                 let cur_task_color = if is_current && !dur.is_zero() {
                     Some(Color::Green)
@@ -255,7 +259,7 @@ impl CommandLog {
                     None
                 };
 
-                row.push(Self::format_duration(dur, cur_task_color));
+                row.push(Self::format_duration(&rounded, cur_task_color));
             }
 
             if show_multiday_totals {
