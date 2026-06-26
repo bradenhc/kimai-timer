@@ -38,8 +38,8 @@ See @README.md for more overview/design/usage information.
 - Add concise doc comments to every struct, enum, and function (summarize what,
   highlight why and how it fits in)
 - Add concise doc comments to every public struct field (summarize what)
-- Add empty doc comment line for doc comments on structs, enums, and functions
-  to improve readability
+- Add empty doc comment line at end of documentation before code for doc
+  comments on structs, enums, and functions to improve readability
 - Separate struct fields with doc comments with newline to improve readability
 - Wrap comments at 100 columns
 - Use `cargo fmt` to format Rust code (after every update)
