@@ -110,8 +110,10 @@ impl CommandAdd {
     /// Returns a list of selectable times for a given date, filtered to exclude future times when
     /// the date is today and `allow_future` is false.
     ///
-    /// Times are in 6-minute increments. When today is selected without `--future`, the list is
-    /// capped at the current minute so the user cannot enter a time that has not yet occurred.
+    /// Times are in 3-minute increments, matching `RoundingMode::Classic(3)` in `store.rs` so
+    /// every selectable time aligns with the minimum billing boundary. When today is selected
+    /// without `--future`, the cap is snapped down to the nearest 3-minute boundary at or before
+    /// the current minute.
     ///
     fn select_time(
         prompt: &str,
@@ -123,19 +125,29 @@ impl CommandAdd {
             chrono::NaiveDate::from_ymd_opt(now.year(), now.month() as u32, u32::from(now.day()))
                 .expect("valid local date");
 
-        let cap: u16 = if !allow_future && date == today {
+        let raw_cap: u16 = if !allow_future && date == today {
             u16::from(now.hour()) * 60 + u16::from(now.minute())
         } else {
             1439
         };
+        let cap = (raw_cap / 3) * 3;
 
-        let times: Vec<String> = (0u16..1440)
-            .step_by(6)
-            .filter(|&m| m <= cap)
-            .map(|m| format!("{:02}:{:02}", m / 60, m % 60))
-            .collect();
+        let times = Self::build_time_options(cap);
 
         Ok(Select::new(prompt, times).prompt()?)
+    }
+
+    /// Builds the list of selectable time strings from `00:00` up to and including `cap_minutes`.
+    ///
+    /// `cap_minutes` must already be snapped to a 3-minute boundary by the caller; this function
+    /// only filters and formats.
+    ///
+    fn build_time_options(cap_minutes: u16) -> Vec<String> {
+        (0u16..1440)
+            .step_by(3)
+            .filter(|&m| m <= cap_minutes)
+            .map(|m| format!("{:02}:{:02}", m / 60, m % 60))
+            .collect()
     }
 
     /// Parses `date_str` and `time_str` into an `OffsetDateTime` at `offset`.
@@ -161,5 +173,58 @@ impl CommandAdd {
         let t = Time::from_hms(hours, minutes, 0).map_err(|e| anyhow!("invalid time: {e}"))?;
 
         Ok(OffsetDateTime::new_in_offset(date, t, offset))
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// MODULE UNIT TESTS BELOW HERE
+// -------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_time_options_full_day() {
+        let times = CommandAdd::build_time_options(1437);
+        assert_eq!(times.len(), 480);
+        assert_eq!(times.first().map(String::as_str), Some("00:00"));
+        assert_eq!(times.last().map(String::as_str), Some("23:57"));
+    }
+
+    #[test]
+    fn build_time_options_past_date_snaps_to_1437() {
+        // cap 1439 floors to (1439/3)*3 = 1437, giving the same full grid as allow_future
+        let cap = (1439u16 / 3) * 3;
+        let times = CommandAdd::build_time_options(cap);
+        assert_eq!(times.len(), 480);
+        assert_eq!(times.last().map(String::as_str), Some("23:57"));
+    }
+
+    #[test]
+    fn build_time_options_now_on_3min_boundary() {
+        // now = 14:06 → raw_cap = 846, snaps to (846/3)*3 = 846; last entry must be "14:06"
+        let cap = (846u16 / 3) * 3;
+        let times = CommandAdd::build_time_options(cap);
+        assert_eq!(times.last().map(String::as_str), Some("14:06"));
+        assert!(!times.contains(&"14:09".to_string()));
+    }
+
+    #[test]
+    fn build_time_options_now_between_boundaries() {
+        // now = 14:07 → raw_cap = 847, snaps to (847/3)*3 = 846; last entry must be "14:06"
+        let cap = (847u16 / 3) * 3;
+        let times = CommandAdd::build_time_options(cap);
+        assert_eq!(times.last().map(String::as_str), Some("14:06"));
+        assert!(!times.contains(&"14:09".to_string()));
+    }
+
+    #[test]
+    fn build_time_options_midnight() {
+        // now = 00:00 → raw_cap = 0, snaps to 0; only "00:00" in the list
+        let cap = 0u16;
+        let times = CommandAdd::build_time_options(cap);
+        assert_eq!(times.len(), 1);
+        assert_eq!(times[0], "00:00");
     }
 }
