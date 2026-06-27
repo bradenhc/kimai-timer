@@ -53,24 +53,10 @@ impl CommandAdd {
         let now_local = Local::now();
         let today = now_local.date_naive();
 
-        let start_date = if self.future {
-            DateSelect::new("Start date?").prompt()?
-        } else {
-            DateSelect::new("Start date?")
-                .with_max_date(today)
-                .prompt()?
-        };
-
+        let start_date = Self::select_date("Start date?", today, self.future)?;
         let start_time = Self::select_time("Start time?", start_date, now_local, self.future)?;
 
-        let stop_date = if self.future {
-            DateSelect::new("Stop date? ").prompt()?
-        } else {
-            DateSelect::new("Stop date? ")
-                .with_max_date(today)
-                .prompt()?
-        };
-
+        let stop_date = Self::select_date("Stop date? ", today, self.future)?;
         let stop_time = Self::select_time("Stop time? ", stop_date, now_local, self.future)?;
 
         let start = Self::combine_date_time(start_date, &start_time)?;
@@ -91,8 +77,23 @@ impl CommandAdd {
         Ok(())
     }
 
-    /// Returns a list of selectable times for a given date, filtered to exclude future times when
-    /// the date is today and `allow_future` is false.
+    /// Prompts the user to select a date from a picker in the console.
+    ///
+    /// The `today` and `allow_future` parameters are used to determine whether the selectable dates
+    /// are restricted to only the current date or whether the user can select any date, including
+    /// those in the future.
+    ///
+    fn select_date(prompt: &str, today: NaiveDate, allow_future: bool) -> Result<NaiveDate> {
+        let date = if allow_future {
+            DateSelect::new(prompt).prompt()?
+        } else {
+            DateSelect::new(prompt).with_max_date(today).prompt()?
+        };
+
+        Ok(date)
+    }
+
+    /// Prompts the user to select a time for the event using a list in the console..
     ///
     /// Times are in 3-minute increments, matching `RoundingMode::Classic(3)` in `store.rs` so
     /// every selectable time aligns with the minimum billing boundary. When today is selected
