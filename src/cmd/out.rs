@@ -6,12 +6,12 @@
 //! saves the task name as the last completed task so `kt in` can resume it with no argument.
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Local, Utc};
 use clap::Parser;
 use colored::Colorize;
-use time::macros::format_description;
-use time::{OffsetDateTime, UtcOffset};
 
 use crate::store::{Store, TimeInterval};
+use crate::time_ext::DateTimeExt;
 
 /// Arguments for the `kt out` subcommand (none currently required).
 ///
@@ -30,19 +30,18 @@ impl CommandOut {
             }
 
             Some(current) => {
-                let start = OffsetDateTime::from_unix_timestamp(current.start)
-                    .map_err(|e| anyhow!("invalid start timestamp in current task: {e}"))?;
-                let end = OffsetDateTime::now_utc().truncate_to_second();
+                let start = DateTime::from_timestamp(current.start, 0)
+                    .ok_or_else(|| anyhow!("invalid start timestamp in current task"))?;
+                let end = Utc::now().truncate_to_second();
 
                 let interval = TimeInterval::new(&current.task, start, end);
                 store.append_interval(interval)?;
                 store.set_last_task(&current.task)?;
                 store.clear_current_task()?;
 
-                let offset = UtcOffset::current_local_offset().unwrap();
-                let fmt = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
-                let local_start = start.to_offset(offset).format(fmt).unwrap();
-                let local_end = end.to_offset(offset).format(fmt).unwrap();
+                let fmt = "%Y-%m-%d %H:%M:%S";
+                let local_start = start.with_timezone(&Local).format(fmt);
+                let local_end = end.with_timezone(&Local).format(fmt);
 
                 println!(
                     "Punched out of {}: {local_start} - {local_end}",

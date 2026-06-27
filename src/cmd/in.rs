@@ -7,14 +7,14 @@
 //! when an unrecognized task is provided.
 
 use anyhow::{Result, anyhow, bail};
+use chrono::{Local, Utc};
 use clap::Parser;
 use colored::Colorize;
 use simsearch::SimSearch;
-use time::macros::format_description;
-use time::{OffsetDateTime, UtcOffset};
 
 use crate::cmd::CommandOut;
 use crate::store::Store;
+use crate::time_ext::DateTimeExt;
 
 /// Arguments for the `kt in` subcommand.
 ///
@@ -88,17 +88,12 @@ impl CommandIn {
             }
         };
 
-        let start = OffsetDateTime::now_utc().truncate_to_second();
-        let start_ts = start.unix_timestamp();
+        let start = Utc::now().truncate_to_second();
+        let start_ts = start.timestamp();
 
         store.set_current_task(&task, start_ts)?;
 
-        let local_time = start
-            .to_offset(UtcOffset::current_local_offset().unwrap())
-            .format(&format_description!(
-                "[year]-[month]-[day] [hour]:[minute]:[second]"
-            ))
-            .unwrap();
+        let local_time = start.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
 
         println!("Punched in to {} at {local_time}", task.green());
 

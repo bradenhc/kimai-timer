@@ -8,11 +8,10 @@
 //! pass `--future` to bypass this when pre-entering known events like PTO or holidays.
 
 use anyhow::{Result, anyhow, bail};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use clap::Parser;
 use colored::Colorize;
 use inquire::{DateSelect, Select};
-use time::macros::format_description;
-use time::{Date, OffsetDateTime, Time, UtcOffset};
 
 use crate::store::{Store, TimeInterval};
 
@@ -51,46 +50,17 @@ impl CommandAdd {
             bail!("invalid task: {task} (must use previously created task)");
         }
 
-        let offset = UtcOffset::current_local_offset().unwrap();
-        let now_local = OffsetDateTime::now_local().unwrap();
+        let now_local = Local::now();
+        let today = now_local.date_naive();
 
-        let today = chrono::NaiveDate::from_ymd_opt(
-            now_local.year(),
-            now_local.month() as u32,
-            u32::from(now_local.day()),
-        )
-        .expect("valid local date");
-
-        let start_date = if self.future {
-            DateSelect::new("Start date?").prompt()?
-        } else {
-            DateSelect::new("Start date?")
-                .with_max_date(today)
-                .prompt()?
-        };
-
+        let start_date = Self::select_date("Start date?", today, self.future)?;
         let start_time = Self::select_time("Start time?", start_date, now_local, self.future)?;
 
-        let stop_date = if self.future {
-            DateSelect::new("Stop date? ").prompt()?
-        } else {
-            DateSelect::new("Stop date? ")
-                .with_max_date(today)
-                .prompt()?
-        };
-
+        let stop_date = Self::select_date("Stop date? ", today, self.future)?;
         let stop_time = Self::select_time("Stop time? ", stop_date, now_local, self.future)?;
 
-        let start = Self::combine_date_time(
-            &start_date.format("%Y-%m-%d").to_string(),
-            &start_time,
-            offset,
-        )?;
-        let stop = Self::combine_date_time(
-            &stop_date.format("%Y-%m-%d").to_string(),
-            &stop_time,
-            offset,
-        )?;
+        let start = Self::combine_date_time(start_date, &start_time)?;
+        let stop = Self::combine_date_time(stop_date, &stop_time)?;
 
         if stop <= start {
             bail!("stop time must be after start time");
@@ -107,8 +77,23 @@ impl CommandAdd {
         Ok(())
     }
 
-    /// Returns a list of selectable times for a given date, filtered to exclude future times when
-    /// the date is today and `allow_future` is false.
+    /// Prompts the user to select a date from a picker in the console.
+    ///
+    /// The `today` and `allow_future` parameters are used to determine whether the selectable dates
+    /// are restricted to only the current date or whether the user can select any date, including
+    /// those in the future.
+    ///
+    fn select_date(prompt: &str, today: NaiveDate, allow_future: bool) -> Result<NaiveDate> {
+        let date = if allow_future {
+            DateSelect::new(prompt).prompt()?
+        } else {
+            DateSelect::new(prompt).with_max_date(today).prompt()?
+        };
+
+        Ok(date)
+    }
+
+    /// Prompts the user to select a time for the event using a list in the console..
     ///
     /// Times are in 3-minute increments, matching `RoundingMode::Classic(3)` in `store.rs` so
     /// every selectable time aligns with the minimum billing boundary. When today is selected
@@ -117,16 +102,14 @@ impl CommandAdd {
     ///
     fn select_time(
         prompt: &str,
-        date: chrono::NaiveDate,
-        now: OffsetDateTime,
+        date: NaiveDate,
+        now: DateTime<Local>,
         allow_future: bool,
     ) -> Result<String> {
-        let today =
-            chrono::NaiveDate::from_ymd_opt(now.year(), now.month() as u32, u32::from(now.day()))
-                .expect("valid local date");
+        let today = now.date_naive();
 
         let raw_cap: u16 = if !allow_future && date == today {
-            u16::from(now.hour()) * 60 + u16::from(now.minute())
+            u16::try_from(now.hour() * 60 + now.minute()).unwrap_or(1439)
         } else {
             1439
         };
@@ -150,29 +133,27 @@ impl CommandAdd {
             .collect()
     }
 
-    /// Parses `date_str` and `time_str` into an `OffsetDateTime` at `offset`.
+    /// Combines `date` and `time_str` (HH:MM) into a UTC timestamp using the local timezone.
     ///
-    fn combine_date_time(
-        date_str: &str,
-        time_str: &str,
-        offset: UtcOffset,
-    ) -> Result<OffsetDateTime> {
-        let date = Date::parse(date_str, &format_description!("[year]-[month]-[day]"))
-            .map_err(|e| anyhow!("invalid date '{date_str}': {e}"))?;
-
+    fn combine_date_time(date: NaiveDate, time_str: &str) -> Result<DateTime<Utc>> {
         let mut parts = time_str.split(':');
-        let hours: u8 = parts
+        let hours: u32 = parts
             .next()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| anyhow!("invalid time format: {time_str}"))?;
-        let minutes: u8 = parts
+        let minutes: u32 = parts
             .next()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| anyhow!("invalid time format: {time_str}"))?;
 
-        let t = Time::from_hms(hours, minutes, 0).map_err(|e| anyhow!("invalid time: {e}"))?;
+        let t = NaiveTime::from_hms_opt(hours, minutes, 0)
+            .ok_or_else(|| anyhow!("invalid time: {hours:02}:{minutes:02}"))?;
 
-        Ok(OffsetDateTime::new_in_offset(date, t, offset))
+        NaiveDateTime::new(date, t)
+            .and_local_timezone(Local)
+            .single()
+            .ok_or_else(|| anyhow!("ambiguous or invalid local datetime: {date} {time_str}"))
+            .map(|dt| dt.with_timezone(&Utc))
     }
 }
 

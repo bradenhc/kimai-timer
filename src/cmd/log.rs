@@ -11,12 +11,11 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Result, bail};
+use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use clap::Parser;
 use colored::{Color, Colorize};
 use tabled::builder::Builder;
 use tabled::settings::Style;
-use time::macros::format_description;
-use time::{Duration, OffsetDateTime, UtcOffset};
 
 use crate::store::{
     CurrentTask, PersistedEventIterator, RoundingMode, Store, StoreEvent, TaskDuration,
@@ -60,9 +59,7 @@ impl CommandLog {
     /// Fetches events from the store, filters to the requested date window, and renders output.
     ///
     pub fn execute(self, store: &Store) -> Result<()> {
-        let offset = UtcOffset::current_local_offset().unwrap();
-
-        let day_range = self.compute_day_range(offset);
+        let day_range = self.compute_day_range();
 
         let current = store.get_current_task()?;
         let all_events = store.fetch_events()?;
@@ -85,10 +82,8 @@ impl CommandLog {
     /// Returns a `Vec` rather than a range so callers can index into it for column headers and
     /// template construction without re-evaluating the priority logic.
     ///
-    fn compute_day_range(&self, offset: UtcOffset) -> Vec<OffsetDateTime> {
-        let today = OffsetDateTime::now_utc()
-            .to_offset(offset)
-            .truncate_to_day();
+    fn compute_day_range(&self) -> Vec<NaiveDate> {
+        let today = Local::now().date_naive();
 
         let days = if let Some(d) = self.days {
             d
@@ -118,15 +113,14 @@ impl CommandLog {
     ///
     fn filter_events_in_range(
         all_events: PersistedEventIterator,
-        start: OffsetDateTime,
+        start: NaiveDate,
     ) -> Result<Vec<TimeInterval>> {
         let mut intervals = Vec::new();
 
         for fetch_result in all_events {
             match fetch_result {
                 Ok(StoreEvent::CreateInterval(interval)) => {
-                    let local_end = interval.end.to_offset(start.offset());
-                    if local_end >= start {
+                    if interval.end.with_timezone(&Local).date_naive() >= start {
                         intervals.push(interval);
                     }
                 }
@@ -140,20 +134,18 @@ impl CommandLog {
     /// Prints each interval as a single human-readable line: `<task> <start> - <end> (HH:MM)`.
     ///
     fn log_raw(intervals: &[TimeInterval]) {
-        let offset = UtcOffset::current_local_offset().unwrap();
-        let fmt = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+        let fmt = "%Y-%m-%d %H:%M:%S";
         for interval in intervals {
-            let local = interval.to_local(offset);
-            let start = local.start.format(fmt).unwrap();
-            let end = local.end.format(fmt).unwrap();
-            let dur = local.end - local.start;
+            let local_start = interval.start.with_timezone(&Local);
+            let local_end = interval.end.with_timezone(&Local);
+            let dur = local_end - local_start;
             println!(
                 "{} {} - {} ({:02}:{:02})",
-                local.task,
-                start,
-                end,
-                dur.whole_hours(),
-                dur.whole_minutes() % 60
+                interval.task,
+                local_start.format(fmt),
+                local_end.format(fmt),
+                dur.num_hours(),
+                dur.num_minutes() % 60
             );
         }
     }
@@ -181,7 +173,7 @@ impl CommandLog {
     fn log_table(
         intervals: &[TimeInterval],
         current: Option<&CurrentTask>,
-        day_range: &[OffsetDateTime],
+        day_range: &[NaiveDate],
     ) {
         if intervals.is_empty() && current.is_none() {
             println!();
@@ -208,12 +200,7 @@ impl CommandLog {
         let mut header = vec![String::new()];
 
         for ts in day_range {
-            header.push(
-                ts.format(&format_description!("[weekday repr:short]"))
-                    .unwrap()
-                    .bold()
-                    .to_string(),
-            );
+            header.push(ts.format("%a").to_string().bold().to_string());
         }
 
         builder.push_record(header);
@@ -221,12 +208,7 @@ impl CommandLog {
         let mut header = vec!["TASK".bold().to_string()];
 
         for ts in day_range {
-            header.push(
-                ts.format(&format_description!("[month]/[day]"))
-                    .unwrap()
-                    .bold()
-                    .to_string(),
-            );
+            header.push(ts.format("%-m/%-d").to_string().bold().to_string());
         }
 
         if show_multiday_totals {
@@ -235,8 +217,8 @@ impl CommandLog {
 
         builder.push_record(header);
 
-        let mut day_totals: Vec<Duration> = vec![Duration::ZERO; day_range.len()];
-        let mut total = Duration::ZERO;
+        let mut day_totals: Vec<Duration> = vec![Duration::zero(); day_range.len()];
+        let mut total = Duration::zero();
 
         for (task, day_durations) in &interval_table.day_durations_by_task {
             let is_current = interval_table
@@ -252,7 +234,7 @@ impl CommandLog {
 
             let mut row = vec![task_name];
 
-            let mut task_total = Duration::ZERO;
+            let mut task_total = Duration::zero();
 
             for (i, (_day, dur)) in day_durations.iter().enumerate() {
                 let rounded = TaskDuration::new(*dur).rounded(&RoundingMode::default());
@@ -304,15 +286,9 @@ impl CommandLog {
         println!("{table}");
 
         if let Some(cur) = current
-            && let Ok(start) = OffsetDateTime::from_unix_timestamp(cur.start)
+            && let Some(start) = DateTime::from_timestamp(cur.start, 0)
         {
-            let offset = day_range[0].offset();
-            let local_start = start
-                .to_offset(offset)
-                .format(&format_description!(
-                    "[year]-[month]-[day] [hour]:[minute]:[second]"
-                ))
-                .unwrap();
+            let local_start = start.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
             println!();
             println!(
                 "{}",
@@ -332,35 +308,30 @@ impl CommandLog {
     fn build_table(
         intervals: &[TimeInterval],
         current: Option<&CurrentTask>,
-        day_range: &[OffsetDateTime],
+        day_range: &[NaiveDate],
     ) -> IntervalTable {
-        let day_durations_template: BTreeMap<OffsetDateTime, Duration> = day_range
-            .iter()
-            .map(|ts| (*ts, Duration::new(0, 0)))
-            .collect();
+        let day_durations_template: BTreeMap<NaiveDate, Duration> =
+            day_range.iter().map(|d| (*d, Duration::zero())).collect();
 
-        let mut day_durations_by_task: BTreeMap<String, BTreeMap<OffsetDateTime, Duration>> =
+        let mut day_durations_by_task: BTreeMap<String, BTreeMap<NaiveDate, Duration>> =
             BTreeMap::new();
 
-        let offset = day_range[0].offset();
-
         for interval in intervals {
-            let local = interval.to_local(offset);
+            let local_start = interval.start.with_timezone(&Local);
+            let local_end = interval.end.with_timezone(&Local);
             Self::update_table(
-                local.start,
-                local.end,
-                &local.task,
+                local_start,
+                local_end,
+                &interval.task,
                 &mut day_durations_by_task,
                 &day_durations_template,
             );
         }
 
         let current_task_name = if let Some(cur) = current {
-            if let Ok(start) = OffsetDateTime::from_unix_timestamp(cur.start) {
-                let local_start = start.to_offset(offset);
-                let local_end = OffsetDateTime::now_utc()
-                    .to_offset(offset)
-                    .truncate_to_second();
+            if let Some(start) = DateTime::from_timestamp(cur.start, 0) {
+                let local_start = start.with_timezone(&Local);
+                let local_end = Utc::now().with_timezone(&Local);
                 Self::update_table(
                     local_start,
                     local_end,
@@ -387,11 +358,11 @@ impl CommandLog {
     /// outside the display window but can appear when a task was started before the window opened.
     ///
     fn update_table(
-        start: OffsetDateTime,
-        end: OffsetDateTime,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
         task: &str,
-        day_durations_by_task: &mut BTreeMap<String, BTreeMap<OffsetDateTime, Duration>>,
-        day_durations_template: &BTreeMap<OffsetDateTime, Duration>,
+        day_durations_by_task: &mut BTreeMap<String, BTreeMap<NaiveDate, Duration>>,
+        day_durations_template: &BTreeMap<NaiveDate, Duration>,
     ) {
         let day_range_start = day_durations_template
             .keys()
@@ -399,12 +370,24 @@ impl CommandLog {
             .expect("missing days in template");
 
         let mut cur_start = start;
-        let mut start_day = cur_start.truncate_to_day();
-        let stop_day = end.truncate_to_day();
+        let mut start_day = cur_start.date_naive();
+        let stop_day = end.date_naive();
 
         while start_day <= stop_day {
-            let next_day = start_day + Duration::DAY;
-            let dur_to_next_day = next_day - cur_start;
+            let next_day = start_day.succ_opt().expect("date overflow");
+            let next_day_dt = Local
+                .from_local_datetime(&next_day.and_time(NaiveTime::MIN))
+                .earliest()
+                .unwrap_or_else(|| {
+                    // DST gap: use the first valid time on next_day instead
+                    Local
+                        .from_local_datetime(
+                            &next_day.and_time(NaiveTime::from_hms_opt(1, 0, 0).unwrap()),
+                        )
+                        .earliest()
+                        .unwrap()
+                });
+            let dur_to_next_day = next_day_dt - cur_start;
             let cur_dur_remaining = end - cur_start;
             let dur = dur_to_next_day.min(cur_dur_remaining);
 
@@ -438,7 +421,7 @@ impl CommandLog {
     /// Uses whole hours and remaining minutes so 90 minutes prints as `01:30`, not `00:90`.
     ///
     fn format_duration(dur: &Duration, color: Option<Color>) -> String {
-        let s = format!("{:02}:{:02}", dur.whole_hours(), dur.whole_minutes() % 60);
+        let s = format!("{:02}:{:02}", dur.num_hours(), dur.num_minutes() % 60);
 
         if let Some(c) = color {
             s.color(c).to_string()
@@ -453,8 +436,8 @@ impl CommandLog {
 /// Keeps tasks in sorted order via `BTreeMap` so table rows are stable across runs.
 ///
 struct IntervalTable {
-    /// Per-task map of day-start timestamps to the accumulated duration for that day.
-    day_durations_by_task: BTreeMap<String, BTreeMap<OffsetDateTime, Duration>>,
+    /// Per-task map of calendar dates to the accumulated duration for that day.
+    day_durations_by_task: BTreeMap<String, BTreeMap<NaiveDate, Duration>>,
 
     /// Name of the currently running task, if any; used to apply green highlighting in the table.
     current_task: Option<String>,

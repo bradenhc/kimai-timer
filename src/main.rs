@@ -18,6 +18,7 @@ use tracing::error;
 
 mod cmd;
 mod store;
+mod time_ext;
 mod trace;
 
 use store::Store;
