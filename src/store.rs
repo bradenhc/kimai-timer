@@ -12,10 +12,12 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
+use chrono::{DateTime, Duration, Utc};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::JsonLinesIter;
-use time::{Duration, OffsetDateTime, UtcOffset};
+
+use crate::time_ext::DateTimeExt;
 
 /// Manages access to all persisted state for the Kimai Timer application.
 ///
@@ -247,48 +249,36 @@ pub struct TimeInterval {
     pub id: String,
 
     /// The time the interval was created.
-    #[serde(with = "time::serde::timestamp")]
-    pub created_at: OffsetDateTime,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub created_at: DateTime<Utc>,
 
     /// The time the interval was last updated; `None` if it has never been modified after creation.
-    pub updated_at: Option<OffsetDateTime>,
+    #[serde(with = "chrono::serde::ts_seconds_option", default)]
+    pub updated_at: Option<DateTime<Utc>>,
 
     /// The name of the task to add the interval to.
     pub task: String,
 
     /// The start timestamp for the interval.
-    #[serde(with = "time::serde::timestamp")]
-    pub start: OffsetDateTime,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub start: DateTime<Utc>,
 
     /// The stop timestamp for the interval.
-    #[serde(with = "time::serde::timestamp")]
-    pub end: OffsetDateTime,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub end: DateTime<Utc>,
 }
 
 impl TimeInterval {
     /// Constructs a new interval with a fresh UUID and the current UTC time as `created_at`.
     ///
-    pub fn new(task: impl Into<String>, start: OffsetDateTime, end: OffsetDateTime) -> Self {
+    pub fn new(task: impl Into<String>, start: DateTime<Utc>, end: DateTime<Utc>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            created_at: OffsetDateTime::now_utc().truncate_to_second(),
+            created_at: Utc::now().truncate_to_second(),
             updated_at: None,
             task: task.into(),
             start,
             end,
-        }
-    }
-
-    /// Returns a copy of this interval with all timestamps converted to `offset`.
-    ///
-    pub fn to_local(&self, offset: UtcOffset) -> Self {
-        Self {
-            id: self.id.clone(),
-            created_at: self.created_at.to_offset(offset),
-            updated_at: self.updated_at,
-            task: self.task.clone(),
-            start: self.start.to_offset(offset),
-            end: self.end.to_offset(offset),
         }
     }
 }
@@ -363,7 +353,7 @@ impl TaskDuration {
     /// returned unchanged; otherwise it is snapped to the next boundary above it.
     ///
     pub fn rounded(&self, mode: &RoundingMode) -> Duration {
-        let secs = self.raw.whole_seconds();
+        let secs = self.raw.num_seconds();
         let boundary: i64 = match mode {
             RoundingMode::Decimal => 36,
             RoundingMode::Classic(n) => i64::from(*n) * 60,
@@ -430,8 +420,8 @@ mod tests {
 
     #[test]
     fn task_duration_rounded_decimal_zero() {
-        let td = TaskDuration::new(Duration::ZERO);
-        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::ZERO);
+        let td = TaskDuration::new(Duration::zero());
+        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::zero());
     }
 
     #[test]
@@ -454,8 +444,8 @@ mod tests {
 
     #[test]
     fn task_duration_rounded_classic_zero() {
-        let td = TaskDuration::new(Duration::ZERO);
-        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::ZERO);
+        let td = TaskDuration::new(Duration::zero());
+        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::zero());
     }
 
     #[test]
@@ -480,8 +470,8 @@ mod tests {
     fn append_and_fetch_interval_roundtrip() {
         let dir = tempdir().unwrap();
         let store = Store::new(dir.path()).unwrap();
-        let start = OffsetDateTime::from_unix_timestamp(1_000_000).unwrap();
-        let end = OffsetDateTime::from_unix_timestamp(1_003_600).unwrap();
+        let start = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let end = DateTime::from_timestamp(1_003_600, 0).unwrap();
         let interval = TimeInterval::new("my-task", start, end);
         let id = interval.id.clone();
         store.append_interval(interval).unwrap();
