@@ -26,6 +26,22 @@ pub struct CommandAdd {
     /// Allow selecting dates and times in the future (e.g. for pre-entering PTO or holidays).
     #[arg(long, short)]
     future: bool,
+
+    /// Start date in YYYY-MM-DD format. Skips the interactive date picker when provided.
+    #[arg(long)]
+    start_date: Option<String>,
+
+    /// Start time in HH:MM format. Skips the interactive time picker when provided.
+    #[arg(long)]
+    start_time: Option<String>,
+
+    /// Stop date in YYYY-MM-DD format. Skips the interactive date picker when provided.
+    #[arg(long)]
+    stop_date: Option<String>,
+
+    /// Stop time in HH:MM format. Skips the interactive time picker when provided.
+    #[arg(long)]
+    stop_time: Option<String>,
 }
 
 impl CommandAdd {
@@ -53,11 +69,24 @@ impl CommandAdd {
         let now_local = Local::now();
         let today = now_local.date_naive();
 
-        let start_date = Self::select_date("Start date?", today, self.future)?;
-        let start_time = Self::select_time("Start time?", start_date, now_local, self.future)?;
-
-        let stop_date = Self::select_date("Stop date? ", today, self.future)?;
-        let stop_time = Self::select_time("Stop time? ", stop_date, now_local, self.future)?;
+        let start_date = match self.start_date {
+            Some(s) => Self::parse_date(&s, "--start-date", today, self.future)?,
+            None => Self::select_date("Start date?", today, None, self.future)?,
+        };
+        let start_time = match self.start_time {
+            Some(s) => {
+                Self::parse_time_flag(&s, "--start-time", start_date, now_local, self.future)?
+            }
+            None => Self::select_time("Start time?", start_date, now_local, self.future)?,
+        };
+        let stop_date = match self.stop_date {
+            Some(s) => Self::parse_date(&s, "--stop-date", today, self.future)?,
+            None => Self::select_date("Stop date? ", today, Some(start_date), self.future)?,
+        };
+        let stop_time = match self.stop_time {
+            Some(s) => Self::parse_time_flag(&s, "--stop-time", stop_date, now_local, self.future)?,
+            None => Self::select_time("Stop time? ", stop_date, now_local, self.future)?,
+        };
 
         let start = Self::combine_date_time(start_date, &start_time)?;
         let stop = Self::combine_date_time(stop_date, &stop_time)?;
@@ -79,18 +108,62 @@ impl CommandAdd {
 
     /// Prompts the user to select a date from a picker in the console.
     ///
-    /// The `today` and `allow_future` parameters are used to determine whether the selectable dates
-    /// are restricted to only the current date or whether the user can select any date, including
-    /// those in the future.
+    /// The `today` and `allow_future` parameters control whether dates are capped at today. When
+    /// `starting` is `Some`, the picker opens on that date — used to pre-seed the stop date with
+    /// the already-chosen start date.
     ///
-    fn select_date(prompt: &str, today: NaiveDate, allow_future: bool) -> Result<NaiveDate> {
-        let date = if allow_future {
-            DateSelect::new(prompt).prompt()?
-        } else {
-            DateSelect::new(prompt).with_max_date(today).prompt()?
-        };
+    fn select_date(
+        prompt: &str,
+        today: NaiveDate,
+        starting: Option<NaiveDate>,
+        allow_future: bool,
+    ) -> Result<NaiveDate> {
+        let mut picker = DateSelect::new(prompt);
+        if let Some(sd) = starting {
+            picker = picker.with_starting_date(sd);
+        }
+        if !allow_future {
+            picker = picker.with_max_date(today);
+        }
+        Ok(picker.prompt()?)
+    }
 
+    /// Parses a date string supplied via a CLI flag, enforcing the future restriction when needed.
+    ///
+    /// Returns a descriptive error if the string is malformed or the date is in the future without
+    /// `--future` being set.
+    ///
+    fn parse_date(s: &str, flag: &str, today: NaiveDate, allow_future: bool) -> Result<NaiveDate> {
+        let date = NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .map_err(|_| anyhow!("invalid {flag}: '{s}' (expected YYYY-MM-DD)"))?;
+        if !allow_future && date > today {
+            bail!("{flag} '{s}' is in the future: pass --future to allow it");
+        }
         Ok(date)
+    }
+
+    /// Parses a time string supplied via a CLI flag, enforcing the future restriction when needed.
+    ///
+    /// Accepts any valid `HH:MM` (not restricted to 3-minute boundaries, unlike the interactive
+    /// picker). Returns a normalised zero-padded `HH:MM` string consistent with `select_time`.
+    ///
+    fn parse_time_flag(
+        s: &str,
+        flag: &str,
+        date: NaiveDate,
+        now: DateTime<Local>,
+        allow_future: bool,
+    ) -> Result<String> {
+        let t = NaiveTime::parse_from_str(s, "%H:%M")
+            .map_err(|_| anyhow!("invalid {flag}: '{s}' (expected HH:MM)"))?;
+        if !allow_future && date == now.date_naive() {
+            let now_mins = now.hour() * 60 + now.minute();
+            let provided_mins = t.hour() * 60 + t.minute();
+            if provided_mins > now_mins {
+                bail!("{flag} '{s}' is in the future: pass --future to allow it");
+            }
+        }
+        Ok(format!("{:02}:{:02}", t.hour(), t.minute()))
     }
 
     /// Prompts the user to select a time for the event using a list in the console..
@@ -158,7 +231,7 @@ impl CommandAdd {
 }
 
 // -------------------------------------------------------------------------------------------------
-// MODULE UNIT TESTS BELOW HERE
+// END OF LOGIC - MODULE UNIT TESTS BELOW HERE
 // -------------------------------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -207,5 +280,118 @@ mod tests {
         let times = CommandAdd::build_time_options(cap);
         assert_eq!(times.len(), 1);
         assert_eq!(times[0], "00:00");
+    }
+
+    #[test]
+    fn parse_date_valid_past() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 27).unwrap();
+        let past = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let result = CommandAdd::parse_date("2026-06-01", "--start-date", today, false);
+        assert_eq!(result.unwrap(), past);
+    }
+
+    #[test]
+    fn parse_date_rejects_future_without_flag() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 27).unwrap();
+        let err = CommandAdd::parse_date("2099-01-01", "--start-date", today, false).unwrap_err();
+        assert!(err.to_string().contains("--start-date"));
+        assert!(err.to_string().contains("--future"));
+    }
+
+    #[test]
+    fn parse_date_accepts_future_with_flag() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 27).unwrap();
+        let result = CommandAdd::parse_date("2099-01-01", "--start-date", today, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_date_rejects_malformed_string() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 27).unwrap();
+        let err = CommandAdd::parse_date("27/06/2026", "--start-date", today, false).unwrap_err();
+        assert!(err.to_string().contains("expected YYYY-MM-DD"));
+    }
+
+    #[test]
+    fn parse_date_rejects_invalid_month() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 27).unwrap();
+        let err = CommandAdd::parse_date("2026-13-01", "--start-date", today, false).unwrap_err();
+        assert!(err.to_string().contains("expected YYYY-MM-DD"));
+    }
+
+    #[test]
+    fn parse_time_flag_valid_time() {
+        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let now: DateTime<Local> = Local::now();
+        let result = CommandAdd::parse_time_flag("09:00", "--start-time", date, now, false);
+        assert_eq!(result.unwrap(), "09:00");
+    }
+
+    #[test]
+    fn parse_time_flag_normalises_output() {
+        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let now: DateTime<Local> = Local::now();
+        let result = CommandAdd::parse_time_flag("9:00", "--start-time", date, now, false);
+        assert_eq!(result.unwrap(), "09:00");
+    }
+
+    #[test]
+    fn parse_time_flag_accepts_off_boundary() {
+        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let now: DateTime<Local> = Local::now();
+        let result = CommandAdd::parse_time_flag("14:07", "--start-time", date, now, false);
+        assert_eq!(result.unwrap(), "14:07");
+    }
+
+    #[test]
+    fn parse_time_flag_rejects_malformed() {
+        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let now: DateTime<Local> = Local::now();
+        let err = CommandAdd::parse_time_flag("9am", "--start-time", date, now, false).unwrap_err();
+        assert!(err.to_string().contains("expected HH:MM"));
+    }
+
+    #[test]
+    fn parse_time_flag_rejects_invalid_hour() {
+        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let now: DateTime<Local> = Local::now();
+        let err =
+            CommandAdd::parse_time_flag("25:00", "--start-time", date, now, false).unwrap_err();
+        assert!(err.to_string().contains("expected HH:MM"));
+    }
+
+    #[test]
+    fn parse_time_flag_rejects_future_on_today_without_flag() {
+        // Use a fixed time of 09:00 today; 23:59 should be rejected.
+        let today = Local::now().date_naive();
+        let now = today
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap();
+        let err =
+            CommandAdd::parse_time_flag("23:59", "--stop-time", today, now, false).unwrap_err();
+        assert!(err.to_string().contains("--future"));
+    }
+
+    #[test]
+    fn parse_time_flag_accepts_future_on_today_with_flag() {
+        let today = Local::now().date_naive();
+        let now = today
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap();
+        let result = CommandAdd::parse_time_flag("23:59", "--stop-time", today, now, true);
+        assert_eq!(result.unwrap(), "23:59");
+    }
+
+    #[test]
+    fn parse_time_flag_allows_future_time_on_past_date() {
+        // "Future" time on a past date is fine even without --future.
+        let past_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let now: DateTime<Local> = Local::now();
+        let result = CommandAdd::parse_time_flag("23:59", "--stop-time", past_date, now, false);
+        assert!(result.is_ok());
     }
 }
