@@ -94,7 +94,7 @@ pub struct CliConfig {
 ///
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Add a new time event (primarily for amending missed events).
+    /// Add a new time interval for a task
     #[clap(visible_alias = "a")]
     Add(cmd::CommandAdd),
 
@@ -102,7 +102,7 @@ pub enum Command {
     #[clap(visible_alias = "ls")]
     List(cmd::CommandList),
 
-    /// Displays a table of task durations organized by days.
+    /// Displays a table of task durations by day.
     #[clap(visible_alias = "l")]
     Log(cmd::CommandLog),
 
@@ -124,6 +124,7 @@ pub enum Command {
 }
 
 /// Entry point: runs the application and maps any error to a non-zero exit code.
+///
 fn main() -> ExitCode {
     if let Err(e) = run_main() {
         error!("{e}");
@@ -134,6 +135,7 @@ fn main() -> ExitCode {
 }
 
 /// Parses CLI arguments, builds the store, and dispatches to the appropriate subcommand handler.
+///
 fn run_main() -> Result<()> {
     let config = CliConfig::parse();
 
