@@ -2,483 +2,611 @@
 
 //! Defines how to access the store of data tracked by Kimai Timer.
 //!
-//! The central type is [`Store`], which provides read/write access to each piece of persisted
-//! state: the task set, the active task, the last completed task, and the append-only timelog.
-//! [`StoreEvent`] and [`TimeInterval`] describe the data written to and read from the timelog.
+//! The store is a single append-only event log. [`Store`] folds that log once when it is opened,
+//! producing an in-memory projection of everything the application knows: the set of projects, the
+//! session currently being worked, and every completed interval. Reads borrow from the projection;
+//! writes append to the log and then apply the very same events to the projection, so the state
+//! held in memory is always exactly what re-opening the store would produce.
+//!
+//! Deriving rather than storing is what removes a whole class of bug. There is no second file to
+//! fall out of step with the log, so punching out cannot half-succeed, and losing project metadata
+//! can no longer make historical time unreadable - an interval whose project is unknown is still
+//! reported, just without a name.
 
-use std::collections::BTreeSet;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
+mod event;
+mod fs;
+mod interval;
+mod project;
+
+use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, bail};
-use chrono::{DateTime, Duration, Utc};
-use directories::ProjectDirs;
-use serde::{Deserialize, Serialize};
-use serde_jsonlines::JsonLinesIter;
+use chrono::{DateTime, Utc};
 
 use crate::time_ext::DateTimeExt;
 
-/// Manages access to all persisted state for the Kimai Timer application.
+use event::{Envelope, Event, EventId};
+
+pub(crate) use fs::StoreRoot;
+pub(crate) use interval::{Interval, RoundingMode, TimeDuration};
+pub(crate) use project::{Project, ProjectId, ProjectName, ProjectSet};
+
+/// The name of the log file inside the store directory.
+const FILE_NAME: &str = "events.jsonl";
+
+/// Provides read and write access to everything Kimai Timer persists.
 ///
-pub struct Store {
-    /// Path to the append-only JSONL event log file.
-    timelog: PathBuf,
+pub(crate) struct Store {
+    /// Absolute path to the event log.
+    path: PathBuf,
 
-    /// Path to the JSON file storing the set of task names.
-    taskset: PathBuf,
+    /// The projection folded from the log.
+    state: State,
 
-    /// Path to the file tracking the in-progress task.
-    current_task: PathBuf,
-
-    /// Path to the file storing the most recently completed task name.
-    last_task: PathBuf,
+    /// Byte offset of a torn final line, to be dropped by the next write.
+    torn_tail_at: Option<u64>,
 }
 
 impl Store {
-    /// Creates a `Store` rooted at `data_dir`, creating it if it does not already exist.
+    /// Opens the store rooted at `root`, folding the log into memory.
     ///
-    pub fn new(data_dir: &Path) -> Result<Self> {
-        if !data_dir.exists() {
-            std::fs::create_dir_all(data_dir).map_err(|e| {
-                anyhow!(
-                    "failed to create project data directory: {}: {e}",
-                    data_dir.display()
-                )
-            })?;
+    /// Opening never creates anything on disk, so commands that only read leave no trace on a
+    /// machine where no time has been recorded yet.
+    ///
+    pub(crate) fn open(root: &StoreRoot) -> Result<Self> {
+        let path = fs::store_path(FILE_NAME, root)?;
+        let contents = event::read_all(&path)?;
+
+        let mut state = State::default();
+        for envelope in contents.envelopes {
+            state.apply(envelope)?;
         }
 
         Ok(Self {
-            timelog: data_dir.join("timelog.jsonl"),
-            taskset: data_dir.join("taskset.json"),
-            current_task: data_dir.join("current"),
-            last_task: data_dir.join("last"),
+            path,
+            state,
+            torn_tail_at: contents.torn_tail_at,
         })
     }
 
-    /// Resolves the platform-appropriate data directory for this application and delegates to
-    /// [`Store::new`].
+    /// Returns every known project.
     ///
-    pub fn with_project_dir() -> Result<Self> {
-        let pdirs = ProjectDirs::from("codes", "hitchcock", "kimai-timer")
-            .ok_or_else(|| anyhow!("failed to derive project directory path"))?;
-        Self::new(pdirs.data_dir())
+    pub(crate) fn projects(&self) -> &ProjectSet {
+        &self.state.projects
     }
 
-    /// Appends a `CreateInterval` event to the timelog.
+    /// Resolves a project reference held by an interval or session.
     ///
-    pub fn append_interval(&self, interval: TimeInterval) -> Result<()> {
-        Self::touch_file(&self.timelog)?;
-
-        let event = StoreEvent::CreateInterval(interval);
-        serde_jsonlines::append_json_lines(&self.timelog, &[event])
-            .map_err(|e| anyhow!("failed to write interval event to timelog: {e}"))?;
-        Ok(())
+    /// Returns `None` when the log references a project this store has never seen, which is
+    /// possible after a hand edit or a future merge. Callers should degrade rather than fail.
+    ///
+    pub(crate) fn project(&self, id: &ProjectId) -> Option<&Project> {
+        self.state.projects.get_by_id(id)
     }
 
-    /// Opens the timelog and returns a lazy iterator over stored events.
+    /// Returns every completed interval, in the order it was recorded.
     ///
-    pub fn fetch_events(&self) -> Result<PersistedEventIterator> {
-        Self::touch_file(&self.timelog)?;
-
-        let lines_iter = serde_jsonlines::json_lines(&self.timelog)
-            .map_err(|e| anyhow!("failed to read timelog: {e}"))?;
-
-        Ok(PersistedEventIterator { inner: lines_iter })
+    /// Work in progress is deliberately excluded; use [`Store::session`] for that.
+    ///
+    pub(crate) fn intervals(&self) -> &[Interval] {
+        &self.state.intervals
     }
 
-    /// Validates the task name, adds it to the persisted task set, and writes the result to disk.
+    /// Returns the session currently being worked, if the timer is running.
     ///
-    /// Names must start with an ASCII letter and contain only alphanumerics or dashes.
-    pub fn add_task(&self, task: impl Into<String>) -> Result<()> {
-        let task = task.into();
+    pub(crate) fn session(&self) -> Option<&Session> {
+        self.state.session.as_ref()
+    }
 
-        if !task.chars().next().unwrap().is_ascii_alphabetic()
-            || task
-                .chars()
-                .any(|c| !(c.is_ascii_alphanumeric() || c == '-'))
-        {
-            bail!(
-                "invalid task name: must start with letter and only contain alphanumerics or dashes"
-            );
+    /// Returns the project the timer most recently stopped on.
+    ///
+    /// This is what `kt in` with no argument resumes. It follows the timer only, so recording an
+    /// interval with `kt add` never changes it.
+    ///
+    pub(crate) fn last_project(&self) -> Option<&Project> {
+        self.state.last.as_ref().and_then(|id| self.project(id))
+    }
+
+    /// Creates a new project.
+    ///
+    /// Returns an error if a project with the same name already exists.
+    ///
+    pub(crate) fn add_project(&mut self, name: ProjectName) -> Result<&Project> {
+        if self.state.projects.contains_name(name.as_str()) {
+            bail!("project '{name}' already exists");
         }
 
-        let mut tasks = self.get_tasks()?;
+        let project_id = ProjectId::new();
 
-        tasks.insert(task);
+        self.commit(vec![Event::ProjectCreated {
+            project_id: project_id.clone(),
+            name,
+        }])?;
 
-        let contents = serde_json::to_string(&tasks)
-            .map_err(|e| anyhow!("failed to save task to taskset: {e}"))?;
-
-        Self::write_file(&self.taskset, &contents)
+        self.project(&project_id)
+            .ok_or_else(|| anyhow!("newly created project is missing from the store"))
     }
 
-    /// Reads and deserializes the full set of task names from disk.
+    /// Starts the timer on a project, closing any session already open.
     ///
-    pub fn get_tasks(&self) -> Result<BTreeSet<String>> {
-        let contents = Self::read_file(&self.taskset)?;
+    /// Both events are written in a single append, so a switch between projects cannot be observed
+    /// or interrupted half-done. Returns the interval that closing the previous session produced,
+    /// if there was one.
+    ///
+    pub(crate) fn start_session(&mut self, id: ProjectId) -> Result<Option<Interval>> {
+        if self.project(&id).is_none() {
+            bail!("no project with ID {id}");
+        }
 
-        let tasks = if contents.is_empty() {
-            BTreeSet::new()
+        let at = Utc::now().truncate_to_second();
+        let closing = self.state.session.is_some();
+
+        let mut events = Vec::new();
+        if closing {
+            events.push(Event::TimerStopped { at });
+        }
+        events.push(Event::TimerStarted { project_id: id, at });
+
+        self.commit(events)?;
+
+        Ok(if closing {
+            self.state.intervals.last().cloned()
         } else {
-            serde_json::from_str(&contents).map_err(|e| anyhow!("failed to parse taskset: {e}"))?
-        };
-
-        Ok(tasks)
+            None
+        })
     }
 
-    /// Returns the in-progress task state, or `None` if no task is active.
+    /// Stops the timer, recording the interval that the open session produced.
     ///
-    pub fn get_current_task(&self) -> Result<Option<CurrentTask>> {
-        let contents = Self::read_file(&self.current_task)?;
-
-        if contents.is_empty() {
-            Ok(None)
-        } else {
-            let current = serde_json::from_str(&contents)
-                .map_err(|e| anyhow!("failed to parse current task: {e}"))?;
-            Ok(Some(current))
-        }
-    }
-
-    /// Persists a new current task with its start timestamp.
-    ///
-    pub fn set_current_task(&self, task: &str, start: i64) -> Result<()> {
-        let current = CurrentTask {
-            task: task.to_string(),
-            start,
-        };
-        let contents = serde_json::to_string(&current)
-            .map_err(|e| anyhow!("failed to serialize current task: {e}"))?;
-        Self::write_file(&self.current_task, &contents)
-    }
-
-    /// Clears the current task by writing an empty file, signaling that no task is active.
-    ///
-    pub fn clear_current_task(&self) -> Result<()> {
-        Self::write_file(&self.current_task, "")
-    }
-
-    /// Returns the name of the most recently completed task, or `None` if none has been set.
-    ///
-    pub fn get_last_task(&self) -> Result<Option<String>> {
-        let last = Self::read_file(&self.last_task)?;
-
-        if last.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(last))
-        }
-    }
-
-    /// Persists `task` as the last completed task so `kt in` can resume it with no argument.
-    ///
-    pub fn set_last_task(&self, task: &str) -> Result<()> {
-        Self::write_file(&self.last_task, task)
-    }
-
-    /// Reads a file as a UTF-8 string, returning an empty string if the file does not yet exist.
-    ///
-    fn read_file(p: &Path) -> Result<String> {
-        if !std::fs::exists(p)
-            .map_err(|e| anyhow!("could not determine if file exists: {}: {e}", p.display()))?
-        {
-            return Ok(String::new());
+    pub(crate) fn stop_session(&mut self) -> Result<Interval> {
+        if self.state.session.is_none() {
+            bail!("no current session");
         }
 
-        std::fs::read_to_string(p).map_err(|e| anyhow!("failed to read file: {}: {e}", p.display()))
+        self.commit(vec![Event::TimerStopped {
+            at: Utc::now().truncate_to_second(),
+        }])?;
+
+        self.state
+            .intervals
+            .last()
+            .cloned()
+            .ok_or_else(|| anyhow!("stopping the session did not produce an interval"))
     }
 
-    /// Writes `contents` to a file, creating or truncating it as necessary.
+    /// Records a completed interval directly, without running the timer.
     ///
-    fn write_file(p: &Path, contents: &str) -> Result<()> {
-        std::fs::write(p, contents.as_bytes())
-            .map_err(|e| anyhow!("failed to write file: {}: {e}", p.display()))
-    }
-
-    /// Creates `p` (and any missing parent directories) without truncating it if it already exists.
-    ///
-    fn touch_file(p: &Path) -> Result<()> {
-        let exists = std::fs::exists(p)
-            .map_err(|e| anyhow!("could not determine if file exists: {}: {e}", p.display()))?;
-
-        if !exists {
-            std::fs::create_dir_all(p.parent().unwrap())
-                .map_err(|e| anyhow!("could not create store directory: {e}"))?;
+    pub(crate) fn add_interval(
+        &mut self,
+        id: ProjectId,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<&Interval> {
+        if self.project(&id).is_none() {
+            bail!("no project with ID {id}");
         }
 
-        let _ = File::options()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(p)
-            .map_err(|e| anyhow!("failed to touch store file: {}: {e}", p.display()))?;
+        if end <= start {
+            bail!("interval end must be after its start");
+        }
 
-        Ok(())
-    }
-}
-
-/// A lazy iterator over [`StoreEvent`] records decoded from the timelog JSONL file.
-///
-pub struct PersistedEventIterator {
-    inner: JsonLinesIter<BufReader<File>, StoreEvent>,
-}
-
-impl Iterator for PersistedEventIterator {
-    type Item = Result<StoreEvent, std::io::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-}
-
-/// An event stored in the append-only timelog.
-///
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data")]
-pub enum StoreEvent {
-    /// Records the addition of a completed time interval.
-    CreateInterval(TimeInterval),
-}
-
-/// An atomic unit of time spent on a task, with a definite start and end.
-///
-#[derive(Clone, Serialize, Deserialize)]
-pub struct TimeInterval {
-    /// The unique ID for the interval (allows deduplication and future modification).
-    pub id: String,
-
-    /// The time the interval was created.
-    #[serde(with = "chrono::serde::ts_seconds")]
-    pub created_at: DateTime<Utc>,
-
-    /// The time the interval was last updated; `None` if it has never been modified after creation.
-    #[serde(with = "chrono::serde::ts_seconds_option", default)]
-    pub updated_at: Option<DateTime<Utc>>,
-
-    /// The name of the task to add the interval to.
-    pub task: String,
-
-    /// The start timestamp for the interval.
-    #[serde(with = "chrono::serde::ts_seconds")]
-    pub start: DateTime<Utc>,
-
-    /// The stop timestamp for the interval.
-    #[serde(with = "chrono::serde::ts_seconds")]
-    pub end: DateTime<Utc>,
-}
-
-impl TimeInterval {
-    /// Constructs a new interval with a fresh UUID and the current UTC time as `created_at`.
-    ///
-    pub fn new(task: impl Into<String>, start: DateTime<Utc>, end: DateTime<Utc>) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            created_at: Utc::now().truncate_to_second(),
-            updated_at: None,
-            task: task.into(),
+        self.commit(vec![Event::IntervalCreated {
+            project_id: id,
             start,
             end,
+        }])?;
+
+        self.state
+            .intervals
+            .last()
+            .ok_or_else(|| anyhow!("newly added interval is missing from the store"))
+    }
+
+    /// Appends events to the log and folds them into the projection.
+    ///
+    /// Routing every write through the same [`State::apply`] the fold uses is what guarantees the
+    /// in-memory state cannot drift from what a fresh read of the log would produce.
+    ///
+    fn commit(&mut self, events: Vec<Event>) -> Result<()> {
+        let envelopes: Vec<Envelope> = events.into_iter().map(Envelope::new).collect();
+
+        event::append_all(&self.path, &envelopes, self.torn_tail_at)?;
+        self.torn_tail_at = None;
+
+        for envelope in envelopes {
+            self.state.apply(envelope)?;
         }
+
+        Ok(())
     }
 }
 
-/// The state of the currently-running task, persisted to the `current` file as JSON.
+/// Everything the application knows, derived from the log.
 ///
-#[derive(Serialize, Deserialize)]
-pub struct CurrentTask {
-    /// Name of the task being tracked.
-    pub task: String,
+#[derive(Debug, Default)]
+struct State {
+    /// Every project that has been created.
+    projects: ProjectSet,
 
-    /// UNIX timestamp (seconds since epoch) of when the task was started.
-    pub start: i64,
+    /// Completed intervals, in the order they were recorded.
+    intervals: Vec<Interval>,
+
+    /// The session currently open, if the timer is running.
+    session: Option<Session>,
+
+    /// The project the timer most recently stopped on.
+    last: Option<ProjectId>,
 }
 
-/// Controls how an aggregated task duration is snapped upward for reporting.
-///
-/// Rounding is applied after all intervals for a task on a given day have been summed, so
-/// the stored timestamps are never affected. Configuration of the active mode is deferred to
-/// a later PR; callers that want the default should use `RoundingMode::default()`.
-///
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum RoundingMode {
-    /// Round up to the nearest 36 seconds (= 0.01 hours).
+impl State {
+    /// Folds a single event into the projection.
     ///
-    /// Guarantees the displayed value is an exact multiple of 0.01 h, so
-    /// `displayed_duration × hourly_rate` never produces a repeating decimal.
-    #[default]
-    Decimal,
+    /// A reference to an unknown project is deliberately not an error here: the interval or session
+    /// is kept so the time is never lost, and resolving the name is left to fail gracefully at
+    /// display time.
+    ///
+    fn apply(&mut self, envelope: Envelope) -> Result<()> {
+        match envelope.event {
+            Event::ProjectCreated { project_id, name } => {
+                self.projects.insert(Project {
+                    id: project_id,
+                    name,
+                })?;
+            }
 
-    /// Round up to the nearest `n` minutes.
-    ///
-    /// The inner value is the granularity in minutes. Kimai recommends 3 as a starting point
-    /// (3 min = 0.05 h), keeping invoice math clean without over-rounding short tasks.
-    /// Unused until the config PR wires up mode selection.
-    #[allow(dead_code)]
-    Classic(u32),
-}
+            Event::TimerStarted { project_id, at } => {
+                self.session = Some(Session {
+                    id: envelope.id,
+                    project_id,
+                    start: at,
+                });
+            }
 
-/// The aggregated true duration for a single task on a single day, with rounding support.
-///
-/// Constructed from the already-accumulated raw [`Duration`] for a task/day bucket. Holds the
-/// unmodified value and exposes [`TaskDuration::rounded`] to obtain the display-ready value
-/// without altering the underlying data.
-///
-pub struct TaskDuration {
-    /// The exact sum of all interval durations for this task on this day.
-    raw: Duration,
-}
+            // An interval derived from the timer inherits the ID of the event that started it, so
+            // it stays addressable by a future edit or delete.
+            Event::TimerStopped { at } => {
+                if let Some(session) = self.session.take() {
+                    self.last = Some(session.project_id.clone());
 
-impl TaskDuration {
-    /// Wraps `raw` without modification.
-    ///
-    pub fn new(raw: Duration) -> Self {
-        Self { raw }
-    }
+                    self.intervals.push(Interval {
+                        id: session.id,
+                        project_id: session.project_id,
+                        start: session.start,
+                        end: at,
+                    });
+                }
+            }
 
-    /// Returns the unmodified accumulated duration.
-    ///
-    /// Unused until callers (e.g. `--raw` reporting paths) are wired up. We haven't hooked it up
-    /// yet because that logic does not yet use the `TaskDuration` type. Once the `Store` exposes
-    /// a function to get `TaskDuration` objects, we can make that update.
-    ///
-    #[allow(dead_code)]
-    pub fn raw(&self) -> Duration {
-        self.raw
-    }
-
-    /// Returns the duration rounded up to the next boundary defined by `mode`.
-    ///
-    /// Both modes use ceiling rounding: if the duration falls exactly on a boundary it is
-    /// returned unchanged; otherwise it is snapped to the next boundary above it.
-    ///
-    pub fn rounded(&self, mode: &RoundingMode) -> Duration {
-        let secs = self.raw.num_seconds();
-        let boundary: i64 = match mode {
-            RoundingMode::Decimal => 36,
-            RoundingMode::Classic(n) => i64::from(*n) * 60,
-        };
-        let remainder = secs % boundary;
-        if remainder == 0 {
-            Duration::seconds(secs)
-        } else {
-            Duration::seconds(secs + boundary - remainder)
+            Event::IntervalCreated {
+                project_id,
+                start,
+                end,
+            } => {
+                self.intervals.push(Interval {
+                    id: envelope.id,
+                    project_id,
+                    start,
+                    end,
+                });
+            }
         }
+
+        Ok(())
     }
 }
+
+/// A timer that is currently running.
+///
+#[derive(Clone, Debug)]
+pub(crate) struct Session {
+    /// The ID of the event that started the session; becomes the ID of the resulting interval.
+    id: EventId,
+
+    /// The project being worked on.
+    pub(crate) project_id: ProjectId,
+
+    /// When work began.
+    pub(crate) start: DateTime<Utc>,
+}
+
+// -------------------------------------------------------------------------------------------------
+// END OF LOGIC - MODULE UNIT TESTS BELOW HERE
+// -------------------------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use chrono::DateTime;
+    use tempfile::{TempDir, tempdir};
+
     use super::*;
-    use tempfile::tempdir;
+
+    /// Opens a store over a fresh temporary directory.
+    fn store_in(dir: &TempDir) -> Store {
+        Store::open(&StoreRoot::specified(dir.path())).unwrap()
+    }
+
+    /// Writes raw log lines so tests can exercise logs this binary did not produce.
+    fn seed(dir: &Path, lines: &[&str]) {
+        let mut contents = String::new();
+        for line in lines {
+            contents.push_str(line);
+            contents.push('\n');
+        }
+        std::fs::write(dir.join(FILE_NAME), contents).unwrap();
+    }
+
+    /// Returns the `type` of every event recorded in the log, in order.
+    fn event_types(dir: &Path) -> Vec<String> {
+        let contents = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        contents
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let v: serde_json::Value = serde_json::from_str(l).unwrap();
+                v["event"]["type"].as_str().unwrap().to_string()
+            })
+            .collect()
+    }
+
+    fn name(n: &str) -> ProjectName {
+        ProjectName::new(n).unwrap()
+    }
 
     #[test]
-    fn new_creates_directory_if_missing() {
+    fn open_creates_nothing_on_disk() {
         let dir = tempdir().unwrap();
         let nested = dir.path().join("a").join("b");
-        assert!(!nested.exists());
-        Store::new(&nested).unwrap();
-        assert!(nested.exists());
+
+        let store = Store::open(&StoreRoot::specified(&nested)).unwrap();
+
+        assert!(!nested.exists(), "read-only open must not touch the disk");
+        assert!(store.projects().is_empty());
+        assert!(store.intervals().is_empty());
+        assert!(store.session().is_none());
     }
 
     #[test]
-    fn add_and_get_tasks_roundtrip() {
+    fn add_project_roundtrips_by_id_and_name() {
         let dir = tempdir().unwrap();
-        let store = Store::new(dir.path()).unwrap();
-        store.add_task("my-task").unwrap();
-        let tasks = store.get_tasks().unwrap();
-        assert!(tasks.contains("my-task"));
+        let mut store = store_in(&dir);
+
+        let id = store.add_project(name("my-project")).unwrap().id.clone();
+
+        assert_eq!(store.project(&id).unwrap().name, name("my-project"));
+        assert_eq!(store.projects().get_by_name("my-project").unwrap().id, id);
+        assert!(store.projects().contains_name("my-project"));
     }
 
     #[test]
-    fn set_and_get_current_task_roundtrip() {
+    fn duplicate_project_name_is_rejected() {
         let dir = tempdir().unwrap();
-        let store = Store::new(dir.path()).unwrap();
-        store.set_current_task("my-task", 1_000_000).unwrap();
-        let current = store.get_current_task().unwrap().unwrap();
-        assert_eq!(current.task, "my-task");
-        assert_eq!(current.start, 1_000_000);
+        let mut store = store_in(&dir);
+
+        store.add_project(name("alpha")).unwrap();
+
+        assert!(store.add_project(name("alpha")).is_err());
+        assert_eq!(store.projects().list().count(), 1);
     }
 
     #[test]
-    fn clear_current_task_returns_none() {
+    fn start_and_stop_session_roundtrip() {
         let dir = tempdir().unwrap();
-        let store = Store::new(dir.path()).unwrap();
-        store.set_current_task("my-task", 1_000_000).unwrap();
-        store.clear_current_task().unwrap();
-        assert!(store.get_current_task().unwrap().is_none());
+        let mut store = store_in(&dir);
+        let id = store.add_project(name("alpha")).unwrap().id.clone();
+
+        assert!(store.start_session(id.clone()).unwrap().is_none());
+        assert_eq!(store.session().unwrap().project_id, id);
+
+        let interval = store.stop_session().unwrap();
+
+        assert_eq!(interval.project_id, id);
+        assert!(store.session().is_none());
+        assert_eq!(store.intervals().len(), 1);
+        assert_eq!(store.last_project().unwrap().id, id);
     }
 
     #[test]
-    fn set_and_get_last_task_roundtrip() {
+    fn stop_without_a_session_is_an_error() {
         let dir = tempdir().unwrap();
-        let store = Store::new(dir.path()).unwrap();
-        store.set_last_task("my-task").unwrap();
-        let last = store.get_last_task().unwrap().unwrap();
-        assert_eq!(last, "my-task");
+        let mut store = store_in(&dir);
+
+        assert!(store.stop_session().is_err());
     }
 
     #[test]
-    fn task_duration_rounded_decimal_zero() {
-        let td = TaskDuration::new(Duration::zero());
-        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::zero());
-    }
-
-    #[test]
-    fn task_duration_rounded_decimal_exact_boundary() {
-        let td = TaskDuration::new(Duration::seconds(72));
-        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::seconds(72));
-    }
-
-    #[test]
-    fn task_duration_rounded_decimal_one_over_boundary() {
-        let td = TaskDuration::new(Duration::seconds(73));
-        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::seconds(108));
-    }
-
-    #[test]
-    fn task_duration_rounded_decimal_just_under_boundary() {
-        let td = TaskDuration::new(Duration::seconds(35));
-        assert_eq!(td.rounded(&RoundingMode::Decimal), Duration::seconds(36));
-    }
-
-    #[test]
-    fn task_duration_rounded_classic_zero() {
-        let td = TaskDuration::new(Duration::zero());
-        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::zero());
-    }
-
-    #[test]
-    fn task_duration_rounded_classic_exact_boundary() {
-        let td = TaskDuration::new(Duration::minutes(6));
-        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::minutes(6));
-    }
-
-    #[test]
-    fn task_duration_rounded_classic_one_second_over_boundary() {
-        let td = TaskDuration::new(Duration::seconds(181));
-        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::minutes(6));
-    }
-
-    #[test]
-    fn task_duration_rounded_classic_just_under_boundary() {
-        let td = TaskDuration::new(Duration::seconds(179));
-        assert_eq!(td.rounded(&RoundingMode::Classic(3)), Duration::minutes(3));
-    }
-
-    #[test]
-    fn append_and_fetch_interval_roundtrip() {
+    fn switch_records_stop_and_start_together() {
         let dir = tempdir().unwrap();
-        let store = Store::new(dir.path()).unwrap();
+        let mut store = store_in(&dir);
+        let alpha = store.add_project(name("alpha")).unwrap().id.clone();
+        let beta = store.add_project(name("beta")).unwrap().id.clone();
+
+        store.start_session(alpha.clone()).unwrap();
+        let closed = store.start_session(beta.clone()).unwrap();
+
+        assert_eq!(closed.unwrap().project_id, alpha);
+        assert_eq!(store.session().unwrap().project_id, beta);
+
+        // The stop and the start are adjacent in the log because they were written as one batch.
+        assert_eq!(
+            event_types(dir.path()),
+            [
+                "ProjectCreated",
+                "ProjectCreated",
+                "TimerStarted",
+                "TimerStopped",
+                "TimerStarted",
+            ]
+        );
+    }
+
+    #[test]
+    fn add_interval_does_not_change_last_project() {
+        let dir = tempdir().unwrap();
+        let mut store = store_in(&dir);
+        let alpha = store.add_project(name("alpha")).unwrap().id.clone();
+        let beta = store.add_project(name("beta")).unwrap().id.clone();
+
+        store.start_session(alpha.clone()).unwrap();
+        store.stop_session().unwrap();
+
         let start = DateTime::from_timestamp(1_000_000, 0).unwrap();
         let end = DateTime::from_timestamp(1_003_600, 0).unwrap();
-        let interval = TimeInterval::new("my-task", start, end);
-        let id = interval.id.clone();
-        store.append_interval(interval).unwrap();
-        let events: Vec<_> = store.fetch_events().unwrap().collect();
-        assert_eq!(events.len(), 1);
-        let StoreEvent::CreateInterval(fetched) = events[0].as_ref().unwrap().clone();
-        assert_eq!(fetched.id, id);
-        assert_eq!(fetched.task, "my-task");
+        store.add_interval(beta, start, end).unwrap();
+
+        assert_eq!(store.intervals().len(), 2);
+        assert_eq!(store.last_project().unwrap().id, alpha);
+    }
+
+    #[test]
+    fn add_interval_rejects_a_non_positive_span() {
+        let dir = tempdir().unwrap();
+        let mut store = store_in(&dir);
+        let id = store.add_project(name("alpha")).unwrap().id.clone();
+
+        let start = DateTime::from_timestamp(1_000_000, 0).unwrap();
+
+        assert!(store.add_interval(id.clone(), start, start).is_err());
+        assert!(store.intervals().is_empty());
+    }
+
+    #[test]
+    fn state_survives_reopen() {
+        let dir = tempdir().unwrap();
+        let id = {
+            let mut store = store_in(&dir);
+            let id = store.add_project(name("alpha")).unwrap().id.clone();
+            store.start_session(id.clone()).unwrap();
+            store.stop_session().unwrap();
+            id
+        };
+
+        let store = store_in(&dir);
+
+        assert_eq!(store.intervals().len(), 1);
+        assert_eq!(store.intervals()[0].project_id, id);
+        assert_eq!(store.last_project().unwrap().id, id);
+        assert!(store.session().is_none());
+    }
+
+    #[test]
+    fn derived_interval_inherits_the_start_event_id() {
+        let dir = tempdir().unwrap();
+        seed(
+            dir.path(),
+            &[
+                r#"{"v":1,"id":"e-proj","ts":1000,"event":{"type":"ProjectCreated","data":{"project_id":"p1","name":"alpha"}}}"#,
+                r#"{"v":1,"id":"e-start","ts":2000,"event":{"type":"TimerStarted","data":{"project_id":"p1","at":2000}}}"#,
+                r#"{"v":1,"id":"e-stop","ts":5600,"event":{"type":"TimerStopped","data":{"at":5600}}}"#,
+            ],
+        );
+
+        let store = store_in(&dir);
+
+        assert_eq!(store.intervals().len(), 1);
+        assert_eq!(store.intervals()[0].id.to_string(), "e-start");
+    }
+
+    #[test]
+    fn interval_with_unknown_project_is_kept_but_unresolved() {
+        let dir = tempdir().unwrap();
+        seed(
+            dir.path(),
+            &[
+                r#"{"v":1,"id":"e1","ts":1000,"event":{"type":"IntervalCreated","data":{"project_id":"ghost","start":1000,"end":4600}}}"#,
+            ],
+        );
+
+        let store = store_in(&dir);
+
+        assert_eq!(store.intervals().len(), 1, "time must never be dropped");
+        assert!(store.project(&store.intervals()[0].project_id).is_none());
+    }
+
+    #[test]
+    fn unrecognized_event_is_skipped() {
+        let dir = tempdir().unwrap();
+        seed(
+            dir.path(),
+            &[
+                r#"{"v":1,"id":"e1","ts":1000,"event":{"type":"ProjectCreated","data":{"project_id":"p1","name":"alpha"}}}"#,
+                r#"{"v":1,"id":"e2","ts":2000,"event":{"type":"ProjectRenamed","data":{"project_id":"p1","name":"beta"}}}"#,
+                r#"{"v":1,"id":"e3","ts":3000,"event":{"type":"IntervalCreated","data":{"project_id":"p1","start":3000,"end":6600}}}"#,
+            ],
+        );
+
+        let store = store_in(&dir);
+
+        assert_eq!(store.projects().list().count(), 1);
+        assert_eq!(
+            store.intervals().len(),
+            1,
+            "events after the unknown one still apply"
+        );
+    }
+
+    #[test]
+    fn event_from_a_newer_schema_version_is_skipped() {
+        let dir = tempdir().unwrap();
+        seed(
+            dir.path(),
+            &[
+                r#"{"v":99,"id":"e1","ts":1000,"event":{"type":"ProjectCreated","data":{"project_id":"p1","name":"alpha"}}}"#,
+                r#"{"v":1,"id":"e2","ts":2000,"event":{"type":"ProjectCreated","data":{"project_id":"p2","name":"beta"}}}"#,
+            ],
+        );
+
+        let store = store_in(&dir);
+
+        assert_eq!(store.projects().list().count(), 1);
+        assert!(store.projects().contains_name("beta"));
+    }
+
+    #[test]
+    fn corrupt_line_before_the_end_is_fatal() {
+        let dir = tempdir().unwrap();
+        seed(
+            dir.path(),
+            &[
+                r#"{"v":1,"id":"e1","ts":1000,"event":{"type":"ProjectCreated","data":{"project_id":"p1","na"#,
+                r#"{"v":1,"id":"e2","ts":2000,"event":{"type":"ProjectCreated","data":{"project_id":"p2","name":"beta"}}}"#,
+            ],
+        );
+
+        assert!(Store::open(&StoreRoot::specified(dir.path())).is_err());
+    }
+
+    #[test]
+    fn torn_trailing_line_is_skipped_then_repaired() {
+        let dir = tempdir().unwrap();
+        let good = r#"{"v":1,"id":"e1","ts":1000,"event":{"type":"ProjectCreated","data":{"project_id":"p1","name":"alpha"}}}"#;
+
+        // A crash mid-append leaves a partial final line with no newline terminator.
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            format!("{good}\n{{\"v\":1,\"id\":\"e2\",\"ts\":20"),
+        )
+        .unwrap();
+
+        let mut store = store_in(&dir);
+
+        assert_eq!(store.projects().list().count(), 1, "good lines still load");
+
+        store.add_project(name("beta")).unwrap();
+
+        let contents = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(
+            !contents.contains(r#""ts":20"#),
+            "torn tail must be dropped"
+        );
+        assert_eq!(
+            event_types(dir.path()),
+            ["ProjectCreated", "ProjectCreated"]
+        );
+
+        // Re-opening sees a clean log with both projects and no warning-worthy remnant.
+        let reopened = store_in(&dir);
+        assert_eq!(reopened.projects().list().count(), 2);
     }
 }

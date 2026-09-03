@@ -1,102 +1,133 @@
 // Copyright (c) 2026 Braden Hitchcock - MIT License (see LICENSE file for details)
 
-//! Implements the `kt in` subcommand for punching in to a task.
+//! Implements the `kt in` subcommand for punching in to a project.
 //!
-//! If no task is specified, resumes the last punched-out task. If a different task is already
-//! active, it automatically punches out first. Uses fuzzy search to suggest similar task names
-//! when an unrecognized task is provided.
+//! If no project is specified, resumes the one the timer last stopped on. If a different project is
+//! already active, the store closes it in the same append that opens the new one, so a switch can
+//! never be left half-done. Uses fuzzy search to suggest similar names when an unrecognized project
+//! is provided.
 
-use anyhow::{Result, anyhow, bail};
-use chrono::{Local, Utc};
+use anyhow::{Result, bail};
 use clap::Parser;
 use colored::Colorize;
 use simsearch::SimSearch;
 
-use crate::cmd::CommandOut;
-use crate::store::Store;
-use crate::time_ext::DateTimeExt;
+use crate::store::{ProjectId, Store};
 
 /// Arguments for the `kt in` subcommand.
 ///
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT_ARG, styles = crate::STYLES)]
-pub struct CommandIn {
-    /// The task to punch in to. When not provided the last punched task will be used.
-    task: Option<String>,
+pub(crate) struct CommandIn {
+    /// The project to punch in to. When not provided the last project will be used.
+    project: Option<String>,
 }
 
 impl CommandIn {
-    /// Constructs a `CommandIn` targeting `task` directly, bypassing interactive prompts.
+    /// Constructs a `CommandIn` targeting `project` directly, bypassing interactive prompts.
     ///
-    /// Used by [`crate::cmd::CommandSwitch`] to reuse the punch-in logic programmatically.
-    pub fn for_task(task: impl Into<String>) -> Self {
+    /// Used by [`crate::cmd::CommandSwitch`] to reuse the punch-in logic.
+    ///
+    pub(crate) fn for_project(project: impl Into<String>) -> Self {
         Self {
-            task: Some(task.into()),
+            project: Some(project.into()),
         }
     }
 
-    /// Punches in to the resolved task, auto-punching out of any active task first if needed.
+    /// Punches in to the resolved project, auto-punching out of any active one first if needed.
     ///
-    pub fn execute(self, store: &Store) -> Result<()> {
-        let tasks = store.get_tasks()?;
-        let current_task = store.get_current_task()?;
+    pub(crate) fn execute(self, store: &mut Store) -> Result<()> {
+        match self.project {
+            None => Self::resume_last(store),
+            Some(name) => Self::punch_in(store, &name),
+        }
+    }
 
-        let task = match self.task {
-            None => {
-                if let Some(c) = current_task {
-                    println!("Already punched in to {}", c.task.green());
-                    return Ok(());
-                }
+    /// Punches in to the project the timer last stopped on.
+    ///
+    fn resume_last(store: &mut Store) -> Result<()> {
+        if let Some(current) = Self::current_name(store) {
+            println!("Already punched in to {}", current.green());
+            return Ok(());
+        }
 
-                store
-                    .get_last_task()?
-                    .ok_or_else(|| anyhow!("missing task and no last task is set"))?
-            }
-
-            Some(task) => {
-                if !tasks.contains(&task) {
-                    let mut engine = SimSearch::new();
-                    let indexed_tasks: Vec<_> = tasks.into_iter().collect();
-                    for (i, t) in indexed_tasks.iter().enumerate() {
-                        engine.insert(i, t);
-                    }
-                    let results = engine.search(&task);
-                    let similar = results.into_iter().map(|i| indexed_tasks[i].clone()).fold(
-                        String::new(),
-                        |acc, cur| {
-                            if acc.is_empty() {
-                                format!(": similar tasks: {cur}")
-                            } else {
-                                format!("{acc}, {cur}")
-                            }
-                        },
-                    );
-
-                    bail!("task does not exist: {task}{similar}");
-                }
-
-                if let Some(c) = current_task {
-                    if c.task == task {
-                        println!("Already punched in to {task}");
-                        return Ok(());
-                    }
-
-                    // Switching tasks: punch out of the current one
-                    CommandOut {}.execute(store)?;
-                }
-                task
-            }
+        let Some(last) = store.last_project() else {
+            bail!("no previous project to punch in to");
         };
 
-        let start = Utc::now().truncate_to_second();
-        let start_ts = start.timestamp();
+        let id = last.id.clone();
+        let name = last.name.to_string();
 
-        store.set_current_task(&task, start_ts)?;
+        store.start_session(id)?;
 
-        let local_time = start.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S");
-
-        println!("Punched in to {} at {local_time}", task.green());
+        println!("Punched in to {}", name.green());
 
         Ok(())
+    }
+
+    /// Punches in to a named project, closing any session already open.
+    ///
+    fn punch_in(store: &mut Store, name: &str) -> Result<()> {
+        if Self::current_name(store).is_some_and(|current| current == name) {
+            println!("Already punched in to {}", name.green());
+            return Ok(());
+        }
+
+        let Some(id) = store.projects().get_by_name(name).map(|p| p.id.clone()) else {
+            bail!(
+                "project does not exist: {name}{}",
+                Self::suggestions(store, name)
+            );
+        };
+
+        if let Some(closed) = store.start_session(id)? {
+            let previous = Self::name_of(store, &closed.project_id);
+            println!("Punched out of {}", previous.bold());
+        }
+
+        println!("Punched in to {}", name.green());
+
+        Ok(())
+    }
+
+    /// Returns the name of the project currently being worked, if the timer is running.
+    ///
+    fn current_name(store: &Store) -> Option<String> {
+        let session = store.session()?;
+        Some(Self::name_of(store, &session.project_id))
+    }
+
+    /// Resolves a project name for display, degrading rather than failing on an unknown reference.
+    ///
+    fn name_of(store: &Store, id: &ProjectId) -> String {
+        store
+            .project(id)
+            .map_or_else(|| String::from("<unknown>"), |p| p.name.to_string())
+    }
+
+    /// Builds a "similar projects" hint for an unrecognized name.
+    ///
+    /// Rather than failing outright on a typo, we fuzzy-search the known projects so the error can
+    /// point at what the user probably meant.
+    ///
+    fn suggestions(store: &Store, name: &str) -> String {
+        let known: Vec<&str> = store.projects().list().map(|p| p.name.as_str()).collect();
+
+        let mut engine = SimSearch::new();
+        for (i, candidate) in known.iter().enumerate() {
+            engine.insert(i, candidate);
+        }
+
+        engine
+            .search(name)
+            .into_iter()
+            .map(|i| known[i])
+            .fold(String::new(), |acc, cur| {
+                if acc.is_empty() {
+                    format!(": similar projects: {cur}")
+                } else {
+                    format!("{acc}, {cur}")
+                }
+            })
     }
 }

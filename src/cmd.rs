@@ -12,10 +12,10 @@ mod new;
 mod out;
 mod switch;
 
-pub use add::CommandAdd;
-pub use r#in::CommandIn;
-pub use list::CommandList;
-pub use log::CommandLog;
-pub use new::CommandNew;
-pub use out::CommandOut;
-pub use switch::CommandSwitch;
+pub(crate) use add::CommandAdd;
+pub(crate) use r#in::CommandIn;
+pub(crate) use list::CommandList;
+pub(crate) use log::CommandLog;
+pub(crate) use new::CommandNew;
+pub(crate) use out::CommandOut;
+pub(crate) use switch::CommandSwitch;

@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Braden Hitchcock - MIT License (see LICENSE file for details)
 
-//! Implements the `kt switch` subcommand for toggling between the current and last tasks.
+//! Implements the `kt switch` subcommand for toggling between the current and last projects.
 //!
-//! Punches in to the previously completed task, which implicitly punches out of the active one
-//! via [`CommandIn`].
+//! Punches in to the project the timer last stopped on, which implicitly punches out of the active
+//! one via [`CommandIn`].
 
 use anyhow::{Result, bail};
 use clap::Parser;
@@ -15,23 +15,21 @@ use crate::store::Store;
 ///
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT_ARG, styles = crate::STYLES)]
-pub struct CommandSwitch {}
+pub(crate) struct CommandSwitch {}
 
 impl CommandSwitch {
-    /// Punches in to the last task, which implicitly punches out of the current one.
+    /// Punches in to the last project, which implicitly punches out of the current one.
     ///
     #[allow(clippy::unused_self)]
-    pub fn execute(self, store: &Store) -> Result<()> {
-        let current_task = store.get_current_task()?;
-        if current_task.is_none() {
-            bail!("no current task to switch from");
+    pub(crate) fn execute(self, store: &mut Store) -> Result<()> {
+        if store.session().is_none() {
+            bail!("no current project to switch from");
         }
 
-        let last_task = store.get_last_task()?;
-        if let Some(last) = last_task {
-            CommandIn::for_task(last).execute(store)
-        } else {
-            bail!("no last task to switch to");
-        }
+        let Some(last) = store.last_project() else {
+            bail!("no last project to switch to");
+        };
+
+        CommandIn::for_project(last.name.to_string()).execute(store)
     }
 }

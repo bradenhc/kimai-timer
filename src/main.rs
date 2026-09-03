@@ -21,7 +21,7 @@ mod store;
 mod time_ext;
 mod trace;
 
-use store::Store;
+use store::{Store, StoreRoot};
 
 /// Removes all styles from the command-line help text to keep things simple.
 const STYLES: Styles = Styles::styled().usage(Style::new());
@@ -70,7 +70,7 @@ const TERM_WIDTH: usize = 80;
 
 /// kt - Seriously Simple Time Tracker
 ///
-/// Allows you to punch in and out of various tasks to track time spent on them.
+/// Punch in and out of projects to track time you spend on them.
 ///
 #[derive(Debug, Parser)]
 #[clap(
@@ -80,7 +80,7 @@ const TERM_WIDTH: usize = 80;
     term_width = TERM_WIDTH,
     version
 )]
-pub struct CliConfig {
+pub(crate) struct CliConfig {
     /// Override the directory used to store kt data files. Also configurable via `KT_DATA_DIR`.
     #[arg(long, global = true, env = "KT_DATA_DIR")]
     data_dir: Option<PathBuf>,
@@ -93,32 +93,32 @@ pub struct CliConfig {
 /// Defines the subcommands you can execute.
 ///
 #[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Add a new time interval for a task
+pub(crate) enum Command {
+    /// Add a new time interval for a project
     #[clap(visible_alias = "a")]
     Add(cmd::CommandAdd),
 
-    /// Lists the current set of tasks.
+    /// Lists the current set of projects.
     #[clap(visible_alias = "ls")]
     List(cmd::CommandList),
 
-    /// Displays a table of task durations by day.
+    /// Displays a table of project durations by day.
     #[clap(visible_alias = "l")]
     Log(cmd::CommandLog),
 
-    /// Punch in to a task (start)
+    /// Punch in to a project (start)
     #[clap(visible_alias = "i")]
     In(cmd::CommandIn),
 
-    /// Create a new task alias
+    /// Create a new project
     #[clap(visible_alias = "n")]
     New(cmd::CommandNew),
 
-    /// Punch out of the current task (stop)
+    /// Punch out of the current project (stop)
     #[clap(visible_alias = "o")]
     Out(cmd::CommandOut),
 
-    /// Switch between current and last task
+    /// Switch between current and last project
     #[clap(visible_alias = "s")]
     Switch(cmd::CommandSwitch),
 }
@@ -141,18 +141,21 @@ fn run_main() -> Result<()> {
 
     trace::init();
 
-    let store = match config.data_dir {
-        Some(dir) => Store::new(&dir)?,
-        None => Store::with_project_dir()?,
+    let root = match config.data_dir {
+        Some(dir) => StoreRoot::specified(dir),
+        None => StoreRoot::derived(),
     };
 
+    let mut store = Store::open(&root)?;
+
+    // Commands that only read borrow the store immutably; the rest need to append to the log.
     match config.command {
-        Command::Add(cmd) => cmd.execute(&store),
+        Command::Add(cmd) => cmd.execute(&mut store),
         Command::List(cmd) => cmd.execute(&store),
         Command::Log(cmd) => cmd.execute(&store),
-        Command::In(cmd) => cmd.execute(&store),
-        Command::New(cmd) => cmd.execute(&store),
-        Command::Out(cmd) => cmd.execute(&store),
-        Command::Switch(cmd) => cmd.execute(&store),
+        Command::In(cmd) => cmd.execute(&mut store),
+        Command::New(cmd) => cmd.execute(&mut store),
+        Command::Out(cmd) => cmd.execute(&mut store),
+        Command::Switch(cmd) => cmd.execute(&mut store),
     }
 }
