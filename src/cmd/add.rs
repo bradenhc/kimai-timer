@@ -3,7 +3,7 @@
 //! Implements the `kt add` subcommand for manually inserting time intervals.
 //!
 //! Used primarily to amend missed or incorrectly tracked sessions. The command prompts for a task,
-//! start date/time, and stop date/time, then appends the resulting interval to the timelog. By
+//! start date/time, and stop date/time, then appends the resulting interval to the time log. By
 //! default, future dates and times are restricted so accidental future entries cannot be created;
 //! pass `--future` to bypass this when pre-entering known events like PTO or holidays.
 
@@ -13,15 +13,15 @@ use clap::Parser;
 use colored::Colorize;
 use inquire::{DateSelect, Select};
 
-use crate::store::{Store, TimeInterval};
+use crate::store::{Project, RoundingMode, Store};
 
 /// Arguments for the `kt add` subcommand.
 ///
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT_ARG, styles = crate::STYLES)]
-pub struct CommandAdd {
-    /// The task to add a time event for (must have been previously created with `new`).
-    task: Option<String>,
+pub(crate) struct CommandAdd {
+    /// The project to add a time event for (must have been previously created with `new`).
+    project: Option<String>,
 
     /// Allow selecting dates and times in the future (e.g. for pre-entering PTO or holidays).
     #[arg(long, short)]
@@ -45,26 +45,33 @@ pub struct CommandAdd {
 }
 
 impl CommandAdd {
-    /// Runs the add flow: selects a task, prompts for start/stop date+time, and saves the interval.
+    /// Runs the add flow: selects a project, prompts for start/stop date+time, saves the interval.
     ///
     /// Snapshots the current local time once at entry so all pickers share a consistent "now"
     /// boundary. When `--future` is not set, the date pickers are capped at today and the time
     /// pickers are filtered to only show times at or before the current time when today is selected.
     ///
-    pub fn execute(self, store: &Store) -> Result<()> {
-        let tasks = store.get_tasks()?;
+    pub(crate) fn execute(self, store: &mut Store) -> Result<()> {
+        // Resolve the project to an owned ID before writing: the lookup borrows the store, and
+        // recording the interval needs it mutably.
+        let (project_id, project_name) = {
+            let project = if let Some(p) = self.project {
+                store
+                    .projects()
+                    .get_by_name(&p)
+                    .ok_or_else(|| anyhow!("no known project named '{p}'"))?
+            } else {
+                let known: Vec<&Project> = store.projects().list().collect();
 
-        let task = match self.task {
-            Some(t) => t,
+                if known.is_empty() {
+                    bail!("no projects exist: create one with `kt new`");
+                }
 
-            None => Select::new("Task?      ", tasks.iter().collect())
-                .prompt()?
-                .clone(),
+                Select::new("Project?   ", known).prompt()?
+            };
+
+            (project.id.clone(), project.name.to_string())
         };
-
-        if !tasks.contains(&task) {
-            bail!("invalid task: {task} (must use previously created task)");
-        }
 
         let now_local = Local::now();
         let today = now_local.date_naive();
@@ -95,12 +102,13 @@ impl CommandAdd {
             bail!("stop time must be after start time");
         }
 
-        let interval = TimeInterval::new(&task, start, stop);
-        store.append_interval(interval)?;
+        let duration = store
+            .add_interval(project_id, start, stop)?
+            .duration(RoundingMode::Classic(3));
 
         println!(
-            "Added interval for {}: {start_time} - {stop_time}",
-            task.green()
+            "Added interval for {}: {start_time} -> {stop_time} ({duration})",
+            project_name.green()
         );
 
         Ok(())
@@ -145,7 +153,7 @@ impl CommandAdd {
     /// Parses a time string supplied via a CLI flag, enforcing the future restriction when needed.
     ///
     /// Accepts any valid `HH:MM` (not restricted to 3-minute boundaries, unlike the interactive
-    /// picker). Returns a normalised zero-padded `HH:MM` string consistent with `select_time`.
+    /// picker). Returns a normalized zero-padded `HH:MM` string consistent with `select_time`.
     ///
     fn parse_time_flag(
         s: &str,

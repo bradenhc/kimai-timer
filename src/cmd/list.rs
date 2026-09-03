@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Braden Hitchcock - MIT License (see LICENSE file for details)
 
-//! Implements the `kt list` subcommand for displaying all known task aliases.
+//! Implements the `kt list` subcommand for displaying all known projects.
 //!
-//! The currently active task is marked with `*` (green), and the last completed task is marked
-//! with `-`, giving a quick visual overview of task state at a glance.
+//! The project currently being worked is marked with `*` (green), and the project the timer last
+//! stopped on is marked with `-`, giving a quick visual overview of timer state at a glance.
 
 use anyhow::Result;
 use clap::Parser;
@@ -15,29 +15,33 @@ use crate::store::Store;
 ///
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT_ARG, styles = crate::STYLES)]
-pub struct CommandList {}
+pub(crate) struct CommandList {}
 
 impl CommandList {
-    /// Prints all tasks, marking the active one with `*` and the last completed one with `-`.
+    /// Prints all projects, marking the active one with `*` and the last one with `-`.
     ///
-    #[allow(clippy::unused_self)]
-    pub fn execute(self, store: &Store) -> Result<()> {
-        let tasks = store.get_tasks()?;
+    /// Returns `Result` even though nothing here can fail, so that every command shares one
+    /// signature and `main` can dispatch to them uniformly.
+    ///
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub(crate) fn execute(self, store: &Store) -> Result<()> {
+        if store.projects().is_empty() {
+            println!("Project set is empty");
+            return Ok(());
+        }
 
-        if tasks.is_empty() {
-            println!("Task set is empty");
-        } else {
-            let current_task = store.get_current_task()?;
-            let last_task = store.get_last_task()?;
+        let current = store.session().map(|s| s.project_id.clone());
+        let last = store.last_project().map(|p| p.id.clone());
 
-            for t in tasks {
-                if current_task.as_ref().is_some_and(|c| c.task == t) {
-                    println!("* {}", t.bold().green());
-                } else if last_task.as_ref().is_some_and(|l| *l == t) {
-                    println!("- {}", t.bold());
-                } else {
-                    println!("  {t}");
-                }
+        for project in store.projects().list() {
+            let name = project.name.as_str();
+
+            if current.as_ref() == Some(&project.id) {
+                println!("* {}", name.bold().green());
+            } else if last.as_ref() == Some(&project.id) {
+                println!("- {}", name.bold());
+            } else {
+                println!("  {name}");
             }
         }
 

@@ -33,6 +33,7 @@ See @README.md for more overview/design/usage information.
 
 ## Code Style
 
+- Use only ASCII characters for all output
 - Doc comments should focus more on "why" and less on "what"
 - Add doc comments to every module summarizing purpose and key elements
 - Add concise doc comments to every struct, enum, and function (summarize what,
