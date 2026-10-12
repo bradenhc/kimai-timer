@@ -45,7 +45,7 @@ pub(crate) struct CommandLog {
     #[arg(long, short)]
     json: bool,
 
-    /// Display time data for the past two-weeks, or a typical pay-period (sets DAYS to 14).
+    /// Display time data for the past two weeks, ending today (sets DAYS to 14).
     #[arg(long, short)]
     period: bool,
 

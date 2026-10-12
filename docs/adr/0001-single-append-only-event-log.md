@@ -38,11 +38,15 @@ the Events not yet seen, de-duplicated by Event ID.
   and a start written in one atomic append, so no consumer has to understand a
   third way of saying the same thing.
 - **Interval identity is an Event ID.** An Interval takes the ID of the Event
-  that created it (`TimerStarted` or `IntervalCreated`), giving a single ID
+  that created it (`SessionOpened` or `IntervalCreated`), giving a single ID
   space for future edit and delete Events to refer to.
 - **No migration from v0.4.** The old files (`timelog.jsonl`, `taskset.json`,
   `current`, `last`) held only scratch data and are ignored. Each line carries a
   schema version `v` so that the first real migration can branch on it.
+- **Renames are aliases, not migrations.** `SessionOpened` and `SessionClosed`
+  were first written as `TimerStarted` and `TimerStopped`. The old names are
+  still accepted on read, so renaming an Event kind needs no version bump; a
+  bump is reserved for a change to an Event's shape.
 
 ## Deferred, with triggers
 

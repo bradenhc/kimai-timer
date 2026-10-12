@@ -20,10 +20,8 @@ use uuid::Uuid;
 
 /// Information about a single project a user is working on.
 ///
-/// Projects are uniquely identified locally by their name and globally by their UUID. The global
-/// identifier allows project information to be exported and imported when moving data across
-/// machines, so a diffing algorithm can detect name collisions from different sources and prompt
-/// the user for action.
+/// A project's identity is its UUID, which never changes. Its name is a unique, human-facing handle
+/// used to refer to it on the command line, and may change without rewriting any history.
 ///
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Project {

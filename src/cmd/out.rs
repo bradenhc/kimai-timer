@@ -2,7 +2,7 @@
 
 //! Implements the `kt out` subcommand for punching out of the current project.
 //!
-//! Stopping the timer is a single append to the event log, which is what makes the interval it
+//! Closing the session is a single append to the event log, which is what makes the interval it
 //! records and the fact that the session ended impossible to observe separately.
 
 use anyhow::Result;

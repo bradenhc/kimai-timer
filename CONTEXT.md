@@ -38,7 +38,8 @@ _Avoid_: Stop, clock out
 
 **Switch**:\
 Punching In while a Session is already open. The old Session is closed and the
-new one opened together, never one without the other.
+new one opened together, never one without the other. `kt switch` is one
+specific Switch: back to the Last Project.
 
 ### Record
 

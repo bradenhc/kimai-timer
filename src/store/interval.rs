@@ -4,7 +4,7 @@
 //!
 //! An [`Interval`] is always closed: it has both a start and an end. Work currently in progress is
 //! not an interval but an open session, which the store exposes separately, so that no consumer can
-//! mistake a running timer for finished work.
+//! mistake a running session for finished work.
 //!
 //! Intervals reference their project by ID rather than by name. Resolving that reference is an
 //! in-memory lookup against the projection, and it is allowed to fail: an interval whose project is

@@ -2,8 +2,8 @@
 
 //! Implements the `kt list` subcommand for displaying all known projects.
 //!
-//! The project currently being worked is marked with `*` (green), and the project the timer last
-//! stopped on is marked with `-`, giving a quick visual overview of timer state at a glance.
+//! The project currently being worked is marked with `*` (green), and the project the last session
+//! closed on is marked with `-`, giving a quick visual overview of session state at a glance.
 
 use anyhow::Result;
 use clap::Parser;

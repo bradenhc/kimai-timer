@@ -48,7 +48,7 @@ fn full_lifecycle_records_and_reports_time() {
     kt(&dir, &["in", "beta"]).success();
     kt(&dir, &["out"]).success();
 
-    // Both projects appear, with the one the timer last stopped on marked.
+    // Both projects appear, with the one the last session closed on marked.
     let listed = kt(&dir, &["list"]).success();
     let listed = String::from_utf8(listed.get_output().stdout.clone()).unwrap();
     assert!(listed.contains("alpha"));

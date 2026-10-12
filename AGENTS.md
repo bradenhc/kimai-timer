@@ -12,11 +12,15 @@ See README.md for more overview and details on design and usage.
 
 ## Commands
 
-- `cargo check` to make sure code compiles without building artifact (faster)
-- `cargo build` to build in debug mode
-- `cargo run` to build and run
-- `cargo test` to run unit and integration tests after updates
-- `cargo clippy` to lint code for quality
+Tools and tasks are managed with `mise` (see `mise.toml`):
+
+- `cargo check` for a fast compile check while iterating
+- `mise run fmt` to format Rust, Markdown, and TOML
+- `mise run test` to run unit and integration tests
+- `mise run ci` to run every check CI runs (format, clippy `-D warnings`, tests,
+  build)
+
+Before committing, run `mise run fmt` then `mise run ci`; it must pass.
 
 ## Code Style
 

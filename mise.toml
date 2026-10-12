@@ -1,6 +1,6 @@
 [tools]
 dprint = "0.62.0"
-rust = { version = "1.99.0", components = "clippy,rust-analyzer" }
+rust = { version = "1.99.0", components = "clippy,rustfmt,rust-analyzer" }
 
 [tasks.build]
 description = "Build the debug binary"

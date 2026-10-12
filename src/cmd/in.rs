@@ -2,7 +2,7 @@
 
 //! Implements the `kt in` subcommand for punching in to a project.
 //!
-//! If no project is specified, resumes the one the timer last stopped on. If a different project is
+//! If no project is specified, resumes the Last Project. If a different project is
 //! already active, the store closes it in the same append that opens the new one, so a switch can
 //! never be left half-done. Uses fuzzy search to suggest similar names when an unrecognized project
 //! is provided.
@@ -43,7 +43,7 @@ impl CommandIn {
         }
     }
 
-    /// Punches in to the project the timer last stopped on.
+    /// Punches in to the Last Project.
     ///
     fn resume_last(store: &mut Store) -> Result<()> {
         if let Some(current) = Self::current_name(store) {
@@ -90,7 +90,7 @@ impl CommandIn {
         Ok(())
     }
 
-    /// Returns the name of the project currently being worked, if the timer is running.
+    /// Returns the name of the project currently being worked, if a session is open.
     ///
     fn current_name(store: &Store) -> Option<String> {
         let session = store.session()?;
