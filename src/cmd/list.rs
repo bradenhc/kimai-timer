@@ -18,7 +18,7 @@ use crate::store::Store;
 pub(crate) struct CommandList {}
 
 impl CommandList {
-    /// Prints all projects, marking the active one with `*` and the last one with `-`.
+    /// Prints all projects, marking the current one with `*` and the last one with `-`.
     ///
     /// Returns `Result` even though nothing here can fail, so that every command shares one
     /// signature and `main` can dispatch to them uniformly.

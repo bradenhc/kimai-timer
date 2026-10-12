@@ -38,10 +38,10 @@ pub(crate) struct Interval {
 }
 
 impl Interval {
-    /// The duration of the interval, ready to be reported under `mode`.
+    /// The exact, unrounded duration of the interval.
     ///
-    pub(crate) fn duration(&self, mode: RoundingMode) -> TimeDuration {
-        TimeDuration::new(self.end - self.start, mode)
+    pub(crate) fn duration(&self) -> Duration {
+        self.end - self.start
     }
 }
 
@@ -101,8 +101,8 @@ impl Display for TimeDuration {
 /// Controls how an aggregated duration is snapped upward for reporting.
 ///
 /// Rounding is applied after all intervals for a project on a given day have been summed, so
-/// the stored timestamps are never affected. Configuration of the active mode is deferred to
-/// a later change; callers that want the default should use `RoundingMode::default()`.
+/// the stored timestamps are never affected. Configuration of the mode is deferred to a later
+/// change; callers that want the default should use `RoundingMode::default()`.
 ///
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum RoundingMode {
@@ -117,6 +117,13 @@ pub(crate) enum RoundingMode {
     ///
     /// The inner value is the granularity in minutes. Kimai recommends 3 as a starting point
     /// (3 min = 0.05 h), keeping invoice math clean without over-rounding short tasks.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "selectable once the Rounding Mode is configurable"
+        )
+    )]
     Classic(u32),
 }
 

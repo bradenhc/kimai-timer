@@ -133,7 +133,7 @@ impl Store {
     /// or interrupted half-done. Returns the interval that closing the previous session produced,
     /// if there was one.
     ///
-    pub(crate) fn start_session(&mut self, id: ProjectId) -> Result<Option<Interval>> {
+    pub(crate) fn open_session(&mut self, id: ProjectId) -> Result<Option<Interval>> {
         if self.project(&id).is_none() {
             bail!("no project with ID {id}");
         }
@@ -158,7 +158,7 @@ impl Store {
 
     /// Closes the open session, recording the interval it produced.
     ///
-    pub(crate) fn stop_session(&mut self) -> Result<Interval> {
+    pub(crate) fn close_session(&mut self) -> Result<Interval> {
         if self.state.session.is_none() {
             bail!("no current session");
         }
@@ -391,15 +391,15 @@ mod tests {
     }
 
     #[test]
-    fn start_and_stop_session_roundtrip() {
+    fn open_and_close_session_roundtrip() {
         let dir = tempdir().unwrap();
         let mut store = store_in(&dir);
         let id = store.add_project(name("alpha")).unwrap().id.clone();
 
-        assert!(store.start_session(id.clone()).unwrap().is_none());
+        assert!(store.open_session(id.clone()).unwrap().is_none());
         assert_eq!(store.session().unwrap().project_id, id);
 
-        let interval = store.stop_session().unwrap();
+        let interval = store.close_session().unwrap();
 
         assert_eq!(interval.project_id, id);
         assert!(store.session().is_none());
@@ -412,7 +412,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut store = store_in(&dir);
 
-        assert!(store.stop_session().is_err());
+        assert!(store.close_session().is_err());
     }
 
     #[test]
@@ -422,8 +422,8 @@ mod tests {
         let alpha = store.add_project(name("alpha")).unwrap().id.clone();
         let beta = store.add_project(name("beta")).unwrap().id.clone();
 
-        store.start_session(alpha.clone()).unwrap();
-        let closed = store.start_session(beta.clone()).unwrap();
+        store.open_session(alpha.clone()).unwrap();
+        let closed = store.open_session(beta.clone()).unwrap();
 
         assert_eq!(closed.unwrap().project_id, alpha);
         assert_eq!(store.session().unwrap().project_id, beta);
@@ -448,8 +448,8 @@ mod tests {
         let alpha = store.add_project(name("alpha")).unwrap().id.clone();
         let beta = store.add_project(name("beta")).unwrap().id.clone();
 
-        store.start_session(alpha.clone()).unwrap();
-        store.stop_session().unwrap();
+        store.open_session(alpha.clone()).unwrap();
+        store.close_session().unwrap();
 
         let start = DateTime::from_timestamp(1_000_000, 0).unwrap();
         let end = DateTime::from_timestamp(1_003_600, 0).unwrap();
@@ -477,8 +477,8 @@ mod tests {
         let id = {
             let mut store = store_in(&dir);
             let id = store.add_project(name("alpha")).unwrap().id.clone();
-            store.start_session(id.clone()).unwrap();
-            store.stop_session().unwrap();
+            store.open_session(id.clone()).unwrap();
+            store.close_session().unwrap();
             id
         };
 

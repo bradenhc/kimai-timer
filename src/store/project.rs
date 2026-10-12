@@ -3,8 +3,8 @@
 //! Defines projects and the in-memory index used to look them up.
 //!
 //! A [`Project`] pairs a stable [`ProjectId`] with the [`ProjectName`] the user types. Keeping the
-//! two separate is what allows a project to be renamed, or linked to a remote contract, without
-//! rewriting any history: events reference the ID, never the name.
+//! two separate is what allows a project to be renamed, or linked to its counterpart on a Kimai server,
+//! without rewriting any history: events reference the ID, never the name.
 //!
 //! [`ProjectSet`] is rebuilt from the event log every time the store is opened and is never
 //! persisted on its own. It indexes projects both ways - by ID for resolving references out of the

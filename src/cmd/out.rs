@@ -28,7 +28,7 @@ impl CommandOut {
             return Ok(());
         }
 
-        let interval = store.stop_session()?;
+        let interval = store.close_session()?;
 
         let name = store
             .project(&interval.project_id)
