@@ -2,10 +2,10 @@
 
 //! Implements the `kt add` subcommand for manually inserting time intervals.
 //!
-//! Used primarily to amend missed or incorrectly tracked sessions. The command prompts for a task,
-//! start date/time, and stop date/time, then appends the resulting interval to the time log. By
-//! default, future dates and times are restricted so accidental future entries cannot be created;
-//! pass `--future` to bypass this when pre-entering known events like PTO or holidays.
+//! Used primarily to amend missed or incorrectly tracked sessions. The command prompts for a
+//! project, start date/time, and stop date/time, then appends the resulting interval to the event
+//! log. By default, future dates and times are restricted so accidental future entries cannot be
+//! created; pass `--future` to bypass this when pre-entering known events like PTO or holidays.
 
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};

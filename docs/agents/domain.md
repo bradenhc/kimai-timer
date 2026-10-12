@@ -55,6 +55,16 @@ If the concept you need isn't in the glossary yet, that's a signal: either
 you're inventing language the project doesn't use (reconsider) or there's a real
 gap (note it for `/domain-modeling`).
 
+When editing `CONTEXT.md`, end the term line and the definition with a trailing
+backslash (a Markdown hard line break) so `dprint` keeps the term, definition,
+and `_Avoid_` line on separate lines:
+
+```md
+**Session**:\
+The single, currently running period of work on one Project.\
+_Avoid_: Current interval
+```
+
 ## Flag ADR conflicts
 
 If your output contradicts an existing ADR, surface it explicitly rather than
