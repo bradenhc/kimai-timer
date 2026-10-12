@@ -9,8 +9,9 @@ which can be reported on and, eventually, synchronized with a Kimai server.
 
 **Project**:\
 A named body of work that time is tracked against. Its identity is stable and
-independent of its name, so it can be renamed without rewriting history. A
-Project exists locally, independent of any Kimai server.\
+independent of its name, so it can be renamed without rewriting history. Its
+name is unique among Projects. A Project exists locally, independent of any
+Kimai server.\
 _Avoid_: Task, Activity, Contract
 
 **Session**:\
@@ -19,7 +20,10 @@ no end, and at most one exists at a time.\
 _Avoid_: Current interval, open interval, active task
 
 **Interval**:\
-A completed period of work on one Project, with both a start and an end.\
+A period of work on one Project, with both a start and an end. It may lie in the
+future, such as planned leave recorded on a Project made for it. Intervals
+should not overlap one another or the Session: `kt` refuses to create an overlap
+where it can, and warns where it cannot rather than lose time.\
 _Avoid_: Time entry, timesheet, record
 
 **Last Project**:\

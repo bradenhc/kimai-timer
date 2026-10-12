@@ -1,35 +1,14 @@
 # Project: Kimai Timer (kt)
 
 Seriously simple Rust CLI that locally tracks time spent on projects and can
-sync with a Kimai server backend.
+sync with a Kimai server backend. See `README.md` for usage.
 
-See README.md for more overview and details on design and usage.
+## Contributing
 
-## Structure
-
-- Subcommands of `kt` are isolated as individual modules in `src/cmd`
-- The `src/store.rs` module defines app interactions with persisted data
-
-## Commands
-
-Tools and tasks are managed with `mise` (see `mise.toml`):
-
-- `cargo check` for a fast compile check while iterating
-- `mise run fmt` to format Rust, Markdown, and TOML
-- `mise run test` to run unit and integration tests
-- `mise run ci` to run every check CI runs (format, clippy `-D warnings`, tests,
-  build)
-
-Before committing, run `mise run fmt` then `mise run ci`; it must pass.
-
-## Code Style
-
-- Use only ASCII characters for all output
-- Code is the ultimate source of truth: keep extra documentation minimal
-- Document every module, summarizing the most important concepts and types
-- Document every public constant, struct, enum, function, trait, and macro
-- Document public struct fields
-- Wrap comments at 100 columns
+**Read `CONTRIBUTING.md` before changing code or docs.** It is the single source
+of truth for setup, project layout, code style, the steps every change goes
+through (changelog entry, `mise run fmt`, `mise run ci`), commit messages,
+releases, and issue labels.
 
 ## Agent skills
 

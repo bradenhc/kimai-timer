@@ -22,16 +22,10 @@ inside a clone.
 
 ## Labels
 
-Labels follow a `group/item` scheme that mirrors Conventional Commits (see
-`CONTRIBUTING.md`):
-
-- **`type/*`**: exactly one. Matches the commit type the fix will use (`feat`,
-  `fix`, `chore`, `perf`, `refactor`, `docs`, `build`, `test`).
-- **`status/*`**: exactly one. See `docs/agents/triage-labels.md` for the state
-  roles.
-- **`scope/*`**: one or more. Matches the commit scope (`cli`, `store`, `sync`).
-  Apply every scope an issue touches.
-- **`wayfinder/*`**: only on `/wayfinder` maps and tickets.
+Labels follow a `group/item` scheme (`type/*`, `status/*`, `scope/*`,
+`wayfinder/*`) defined in the Issues section of `CONTRIBUTING.md`; read it
+before applying labels. `docs/agents/triage-labels.md` maps the skills' triage
+roles onto them.
 
 Name the specific subcommand in the issue title when relevant (e.g.
 `add: reject overlapping entries`) rather than adding a label for it.

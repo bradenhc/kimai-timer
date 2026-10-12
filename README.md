@@ -54,9 +54,8 @@ is calculated from that log.
 
 Before you can track your time, you must create a **project** using `kt new`. A
 project has a stable identity separate from its name, so it can later be renamed
-or linked against a specific contract stored in [Kimai] - which is where `kt`
-will push time events to - without rewriting any history you have already
-recorded.
+or linked to its counterpart on a [Kimai] server without rewriting any history
+you have already recorded.
 
 Once you have a project, you use the `kt in` and `kt out` commands to capture
 when you start and stop working on it. Running `kt in` with another project
@@ -69,12 +68,12 @@ it easy to bounce between two projects.
 
 To record work after the fact, use `kt add`.
 
-## Viewing Time Logs
+## Viewing Reports
 
-Use the `kt log` command to view a table of how much time you have spent on your
-projects. By default the command only shows data for the current day. You can
-use command options to control how many days are displayed and the format of the
-output.
+Use the `kt log` command to view a report of how much time you have spent on
+your projects. By default the command only shows data for the current day. You
+can use command options to control how many days are displayed and the format of
+the output.
 
 ## Integrating with Kimai
 
@@ -89,6 +88,10 @@ to keep track of how much time they spend on each project they work on.
 
 Planned: you will authenticate `kt` with a Kimai [user token], then push and
 pull time much like a Git remote. Until then, `kt` works entirely offline.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 [Kimai]: https://www.kimai.org/en/
 [user token]: https://www.kimai.org/documentation/user-api.html
