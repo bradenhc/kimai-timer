@@ -1,12 +1,12 @@
 [package]
 name = "kimai-timer"
 version = "0.5.0"
+categories = ["command-line-utilities"]
 edition = "2024"
-description = "Seriously Simple Time Tracker"
+keywords = ["kimai", "productivity"]
 license = "MIT"
 repository = "https://github.com/bradenhc/kimai-timer"
-categories = ["command-line-utilities"]
-keywords = ["kimai", "productivity"]
+description = "Seriously Simple Time Tracker"
 
 [[bin]]
 name = "kt"
@@ -24,9 +24,9 @@ serde-jsonlines = "0.7.0"
 serde_json = "1.0.149"
 simsearch = "0.3.0"
 tabled = { version = "0.20.0", features = ["ansi"] }
-uuid = { version = "1", features = ["v4"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 assert_cmd = "2"
