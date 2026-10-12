@@ -68,9 +68,9 @@ and this project adheres to
 - Local time tracking: `kt new`, `kt in`, `kt out`, `kt switch`, `kt list`, and
   `kt log`.
 
-[unreleased]: https://github.com/bradenhc/kimai-timer/compare/0.5.0...HEAD
-[0.5.0]: https://github.com/bradenhc/kimai-timer/compare/0.4.0...0.5.0
-[0.4.0]: https://github.com/bradenhc/kimai-timer/compare/0.3.0...0.4.0
-[0.3.0]: https://github.com/bradenhc/kimai-timer/compare/0.2.0...0.3.0
-[0.2.0]: https://github.com/bradenhc/kimai-timer/compare/0.1.0...0.2.0
-[0.1.0]: https://github.com/bradenhc/kimai-timer/releases/tag/0.1.0
+[unreleased]: https://github.com/bradenhc/kimai-timer/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/bradenhc/kimai-timer/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/bradenhc/kimai-timer/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/bradenhc/kimai-timer/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/bradenhc/kimai-timer/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/bradenhc/kimai-timer/releases/tag/v0.1.0

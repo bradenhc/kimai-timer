@@ -126,7 +126,8 @@ To release:
    the compare links at the bottom.
 3. Open a PR titled `build: release X.Y.Z` and merge it once CI passes.
 4. Tag the merge commit and push the tag:
-   `git tag X.Y.Z && git push origin X.Y.Z` (tags have no `v` prefix).
+   `git tag vX.Y.Z && git push origin vX.Y.Z` (tags have a `v` prefix; the
+   version in `Cargo.toml` and `CHANGELOG.md` does not).
 5. From that commit, run `cargo publish --locked`.
 
 ## Issues
