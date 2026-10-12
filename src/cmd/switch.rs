@@ -2,8 +2,8 @@
 
 //! Implements the `kt switch` subcommand for toggling between the current and last projects.
 //!
-//! Punches in to the project the timer last stopped on, which implicitly punches out of the active
-//! one via [`CommandIn`].
+//! Punches in to the Last Project, which implicitly punches out of the current one via
+//! [`CommandIn`].
 
 use anyhow::{Result, bail};
 use clap::Parser;

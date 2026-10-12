@@ -2,9 +2,10 @@
 
 //! Kimai Timer (kt) - Seriously Simple Time Tracker
 //!
-//! The `kt` application tracks how much time you spend on tasks. You can "punch in" to a task using
-//! `kt in` and "punch out" of a task using `kt out`. Kimai Timer maintains a timer log of punch
-//! events and uses the log to report on how much time was spent on each task.
+//! The `kt` application tracks how much time you spend on projects. You can "punch in" to a
+//! project using `kt in` and "punch out" of a project using `kt out`. Kimai Timer records every
+//! change in an append-only event log and uses it to report on how much time was spent on each
+//! project.
 //!
 //! See the repo README for more details.
 

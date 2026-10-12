@@ -2,10 +2,10 @@
 
 //! Implements the `kt add` subcommand for manually inserting time intervals.
 //!
-//! Used primarily to amend missed or incorrectly tracked sessions. The command prompts for a task,
-//! start date/time, and stop date/time, then appends the resulting interval to the time log. By
-//! default, future dates and times are restricted so accidental future entries cannot be created;
-//! pass `--future` to bypass this when pre-entering known events like PTO or holidays.
+//! Used primarily to amend missed or incorrectly tracked sessions. The command prompts for a
+//! project, start date/time, and stop date/time, then appends the resulting interval to the event
+//! log. By default, future dates and times are restricted so accidental future entries cannot be
+//! created; pass `--future` to bypass this when pre-entering known events like PTO or holidays.
 
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
@@ -13,14 +13,14 @@ use clap::Parser;
 use colored::Colorize;
 use inquire::{DateSelect, Select};
 
-use crate::store::{Project, RoundingMode, Store};
+use crate::store::{Project, Store};
 
 /// Arguments for the `kt add` subcommand.
 ///
 #[derive(Debug, Parser)]
 #[command(help_template = crate::HELP_TEMPLATE_OPT_ARG, styles = crate::STYLES)]
 pub(crate) struct CommandAdd {
-    /// The project to add a time event for (must have been previously created with `new`).
+    /// The project to add an interval for (must have been previously created with `new`).
     project: Option<String>,
 
     /// Allow selecting dates and times in the future (e.g. for pre-entering PTO or holidays).
@@ -102,13 +102,14 @@ impl CommandAdd {
             bail!("stop time must be after start time");
         }
 
-        let duration = store
-            .add_interval(project_id, start, stop)?
-            .duration(RoundingMode::Classic(3));
+        // Recorded times are never rounded (ADR-0002), so neither is the duration reported here.
+        let duration = store.add_interval(project_id, start, stop)?.duration();
 
         println!(
-            "Added interval for {}: {start_time} -> {stop_time} ({duration})",
-            project_name.green()
+            "Added interval for {}: {start_time} -> {stop_time} ({:02}:{:02})",
+            project_name.green(),
+            duration.num_hours(),
+            duration.num_minutes() % 60
         );
 
         Ok(())
@@ -174,12 +175,11 @@ impl CommandAdd {
         Ok(format!("{:02}:{:02}", t.hour(), t.minute()))
     }
 
-    /// Prompts the user to select a time for the event using a list in the console..
+    /// Prompts the user to select a time from a list in the console.
     ///
-    /// Times are in 3-minute increments, matching `RoundingMode::Classic(3)` in `store.rs` so
-    /// every selectable time aligns with the minimum billing boundary. When today is selected
-    /// without `--future`, the cap is snapped down to the nearest 3-minute boundary at or before
-    /// the current minute.
+    /// Times are offered in 3-minute increments to keep the list short; use the `--start-time` and
+    /// `--stop-time` flags for any other minute. When today is selected without `--future`, the cap
+    /// is snapped down to the nearest 3-minute boundary at or before the current minute.
     ///
     fn select_time(
         prompt: &str,

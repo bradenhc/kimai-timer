@@ -45,7 +45,7 @@ pub(crate) struct CommandLog {
     #[arg(long, short)]
     json: bool,
 
-    /// Display time data for the past two-weeks, or a typical pay-period (sets DAYS to 14).
+    /// Display time data for the past two weeks, ending today (sets DAYS to 14).
     #[arg(long, short)]
     period: bool,
 
@@ -161,7 +161,7 @@ impl CommandLog {
     ///
     /// Prints a helpful hint and returns early when there is nothing to show. When the window spans
     /// more than one day, an extra TOTAL column is appended on the right for per-project and grand
-    /// totals. The active project's row and its non-zero cells are highlighted green to distinguish
+    /// totals. The current project's row and its non-zero cells are highlighted green to distinguish
     /// in-progress time from completed intervals.
     ///
     #[allow(clippy::too_many_lines)]
@@ -288,7 +288,7 @@ impl CommandLog {
     ///
     fn print_empty_hint() {
         println!();
-        println!("No events in time log window: use `kt in` and `kt out` to track your time");
+        println!("No time recorded in this window: use `kt in` and `kt out` to track your time");
         println!();
     }
 

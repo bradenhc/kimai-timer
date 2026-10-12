@@ -2,9 +2,9 @@
 
 //! Implements the `kt in` subcommand for punching in to a project.
 //!
-//! If no project is specified, resumes the one the timer last stopped on. If a different project is
-//! already active, the store closes it in the same append that opens the new one, so a switch can
-//! never be left half-done. Uses fuzzy search to suggest similar names when an unrecognized project
+//! If no project is specified, resumes the Last Project. If a Session is already open on a
+//! different project, the store closes it in the same append that opens the new one, so a Switch
+//! can never be left half-done. Uses fuzzy search to suggest similar names when an unrecognized project
 //! is provided.
 
 use anyhow::{Result, bail};
@@ -34,7 +34,7 @@ impl CommandIn {
         }
     }
 
-    /// Punches in to the resolved project, auto-punching out of any active one first if needed.
+    /// Punches in to the resolved project, punching out of any open session first.
     ///
     pub(crate) fn execute(self, store: &mut Store) -> Result<()> {
         match self.project {
@@ -43,7 +43,7 @@ impl CommandIn {
         }
     }
 
-    /// Punches in to the project the timer last stopped on.
+    /// Punches in to the Last Project.
     ///
     fn resume_last(store: &mut Store) -> Result<()> {
         if let Some(current) = Self::current_name(store) {
@@ -58,7 +58,7 @@ impl CommandIn {
         let id = last.id.clone();
         let name = last.name.to_string();
 
-        store.start_session(id)?;
+        store.open_session(id)?;
 
         println!("Punched in to {}", name.green());
 
@@ -80,7 +80,7 @@ impl CommandIn {
             );
         };
 
-        if let Some(closed) = store.start_session(id)? {
+        if let Some(closed) = store.open_session(id)? {
             let previous = Self::name_of(store, &closed.project_id);
             println!("Punched out of {}", previous.bold());
         }
@@ -90,7 +90,7 @@ impl CommandIn {
         Ok(())
     }
 
-    /// Returns the name of the project currently being worked, if the timer is running.
+    /// Returns the name of the project currently being worked, if a session is open.
     ///
     fn current_name(store: &Store) -> Option<String> {
         let session = store.session()?;

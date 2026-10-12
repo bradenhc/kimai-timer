@@ -41,7 +41,7 @@ const SCHEMA_VERSION: u32 = 1;
 /// The unique ID of a single event in the log.
 ///
 /// Also serves as the identity of whatever the event creates: an interval derived from a
-/// [`Event::TimerStarted`] / [`Event::TimerStopped`] pair inherits the ID of the event that started
+/// [`Event::SessionOpened`] / [`Event::SessionClosed`] pair inherits the ID of the event that opened
 /// it, and an interval added directly inherits the ID of its [`Event::IntervalCreated`]. That gives
 /// one ID space rather than two, and makes "which event produced this interval" always answerable.
 ///
@@ -90,7 +90,7 @@ impl Envelope {
 
 /// Something that happened, as recorded in the log.
 ///
-/// The vocabulary is deliberately orthogonal: starting and stopping the timer are separate events
+/// The vocabulary is deliberately orthogonal: opening and closing a session are separate events
 /// rather than a combined "switch", so that a switch is expressed by writing both in a single
 /// atomic append and no consumer has to understand a third way of saying the same thing.
 ///
@@ -106,8 +106,11 @@ pub(crate) enum Event {
         name: ProjectName,
     },
 
-    /// The timer started running against a project.
-    TimerStarted {
+    /// A session was opened on a project (punch in).
+    ///
+    /// Logs written before the rename name this `TimerStarted`; the alias keeps them readable.
+    #[serde(alias = "TimerStarted")]
+    SessionOpened {
         /// The project being worked on.
         project_id: ProjectId,
 
@@ -116,14 +119,17 @@ pub(crate) enum Event {
         at: DateTime<Utc>,
     },
 
-    /// The timer stopped, closing whichever session was open.
-    TimerStopped {
+    /// Whichever session was open was closed (punch out).
+    ///
+    /// Logs written before the rename name this `TimerStopped`; the alias keeps them readable.
+    #[serde(alias = "TimerStopped")]
+    SessionClosed {
         /// When work ended.
         #[serde(with = "chrono::serde::ts_seconds")]
         at: DateTime<Utc>,
     },
 
-    /// A completed interval was recorded directly, without running the timer.
+    /// A completed interval was recorded directly, without opening a session.
     IntervalCreated {
         /// The project the work belongs to.
         project_id: ProjectId,

@@ -1,0 +1,27 @@
+[tools]
+dprint = "0.62.0"
+rust = { version = "1.99.0", components = "clippy,rustfmt,rust-analyzer" }
+
+[tasks.build]
+description = "Build the debug binary"
+run = "cargo build"
+
+[tasks.check]
+description = "Verify formatting and lint without modifying files"
+run = [
+  "cargo fmt --check",
+  "dprint check",
+  "cargo clippy --all-targets -- -D warnings",
+]
+
+[tasks.fmt]
+description = "Format Rust, Markdown, and TOML sources"
+run = ["cargo fmt", "dprint fmt"]
+
+[tasks.test]
+description = "Run unit and integration tests"
+run = "cargo test"
+
+[tasks.ci]
+description = "Run every check performed in CI"
+depends = ["check", "test", "build"]

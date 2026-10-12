@@ -92,15 +92,15 @@ impl Store {
         &self.state.intervals
     }
 
-    /// Returns the session currently being worked, if the timer is running.
+    /// Returns the session currently open, if any.
     ///
     pub(crate) fn session(&self) -> Option<&Session> {
         self.state.session.as_ref()
     }
 
-    /// Returns the project the timer most recently stopped on.
+    /// Returns the project the most recent session closed on.
     ///
-    /// This is what `kt in` with no argument resumes. It follows the timer only, so recording an
+    /// This is what `kt in` with no argument resumes. It follows sessions only, so recording an
     /// interval with `kt add` never changes it.
     ///
     pub(crate) fn last_project(&self) -> Option<&Project> {
@@ -127,13 +127,13 @@ impl Store {
             .ok_or_else(|| anyhow!("newly created project is missing from the store"))
     }
 
-    /// Starts the timer on a project, closing any session already open.
+    /// Opens a session on a project, closing any session already open.
     ///
     /// Both events are written in a single append, so a switch between projects cannot be observed
     /// or interrupted half-done. Returns the interval that closing the previous session produced,
     /// if there was one.
     ///
-    pub(crate) fn start_session(&mut self, id: ProjectId) -> Result<Option<Interval>> {
+    pub(crate) fn open_session(&mut self, id: ProjectId) -> Result<Option<Interval>> {
         if self.project(&id).is_none() {
             bail!("no project with ID {id}");
         }
@@ -143,9 +143,9 @@ impl Store {
 
         let mut events = Vec::new();
         if closing {
-            events.push(Event::TimerStopped { at });
+            events.push(Event::SessionClosed { at });
         }
-        events.push(Event::TimerStarted { project_id: id, at });
+        events.push(Event::SessionOpened { project_id: id, at });
 
         self.commit(events)?;
 
@@ -156,14 +156,14 @@ impl Store {
         })
     }
 
-    /// Stops the timer, recording the interval that the open session produced.
+    /// Closes the open session, recording the interval it produced.
     ///
-    pub(crate) fn stop_session(&mut self) -> Result<Interval> {
+    pub(crate) fn close_session(&mut self) -> Result<Interval> {
         if self.state.session.is_none() {
             bail!("no current session");
         }
 
-        self.commit(vec![Event::TimerStopped {
+        self.commit(vec![Event::SessionClosed {
             at: Utc::now().truncate_to_second(),
         }])?;
 
@@ -174,7 +174,7 @@ impl Store {
             .ok_or_else(|| anyhow!("stopping the session did not produce an interval"))
     }
 
-    /// Records a completed interval directly, without running the timer.
+    /// Records a completed interval directly, without opening a session.
     ///
     pub(crate) fn add_interval(
         &mut self,
@@ -231,10 +231,10 @@ struct State {
     /// Completed intervals, in the order they were recorded.
     intervals: Vec<Interval>,
 
-    /// The session currently open, if the timer is running.
+    /// The session currently open, if any.
     session: Option<Session>,
 
-    /// The project the timer most recently stopped on.
+    /// The project the most recent session closed on.
     last: Option<ProjectId>,
 }
 
@@ -254,7 +254,7 @@ impl State {
                 })?;
             }
 
-            Event::TimerStarted { project_id, at } => {
+            Event::SessionOpened { project_id, at } => {
                 self.session = Some(Session {
                     id: envelope.id,
                     project_id,
@@ -262,9 +262,9 @@ impl State {
                 });
             }
 
-            // An interval derived from the timer inherits the ID of the event that started it, so
+            // An interval derived from a session inherits the ID of the event that opened it, so
             // it stays addressable by a future edit or delete.
-            Event::TimerStopped { at } => {
+            Event::SessionClosed { at } => {
                 if let Some(session) = self.session.take() {
                     self.last = Some(session.project_id.clone());
 
@@ -295,7 +295,7 @@ impl State {
     }
 }
 
-/// A timer that is currently running.
+/// The single period of work currently open on a project.
 ///
 #[derive(Clone, Debug)]
 pub(crate) struct Session {
@@ -363,7 +363,7 @@ mod tests {
 
         assert!(!nested.exists(), "read-only open must not touch the disk");
         assert!(store.projects().is_empty());
-        assert!(store.intervals().is_empty());
+        assert_eq!(store.intervals(), []);
         assert!(store.session().is_none());
     }
 
@@ -391,15 +391,15 @@ mod tests {
     }
 
     #[test]
-    fn start_and_stop_session_roundtrip() {
+    fn open_and_close_session_roundtrip() {
         let dir = tempdir().unwrap();
         let mut store = store_in(&dir);
         let id = store.add_project(name("alpha")).unwrap().id.clone();
 
-        assert!(store.start_session(id.clone()).unwrap().is_none());
+        assert!(store.open_session(id.clone()).unwrap().is_none());
         assert_eq!(store.session().unwrap().project_id, id);
 
-        let interval = store.stop_session().unwrap();
+        let interval = store.close_session().unwrap();
 
         assert_eq!(interval.project_id, id);
         assert!(store.session().is_none());
@@ -412,7 +412,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut store = store_in(&dir);
 
-        assert!(store.stop_session().is_err());
+        assert!(store.close_session().is_err());
     }
 
     #[test]
@@ -422,8 +422,8 @@ mod tests {
         let alpha = store.add_project(name("alpha")).unwrap().id.clone();
         let beta = store.add_project(name("beta")).unwrap().id.clone();
 
-        store.start_session(alpha.clone()).unwrap();
-        let closed = store.start_session(beta.clone()).unwrap();
+        store.open_session(alpha.clone()).unwrap();
+        let closed = store.open_session(beta.clone()).unwrap();
 
         assert_eq!(closed.unwrap().project_id, alpha);
         assert_eq!(store.session().unwrap().project_id, beta);
@@ -434,9 +434,9 @@ mod tests {
             [
                 "ProjectCreated",
                 "ProjectCreated",
-                "TimerStarted",
-                "TimerStopped",
-                "TimerStarted",
+                "SessionOpened",
+                "SessionClosed",
+                "SessionOpened",
             ]
         );
     }
@@ -448,8 +448,8 @@ mod tests {
         let alpha = store.add_project(name("alpha")).unwrap().id.clone();
         let beta = store.add_project(name("beta")).unwrap().id.clone();
 
-        store.start_session(alpha.clone()).unwrap();
-        store.stop_session().unwrap();
+        store.open_session(alpha.clone()).unwrap();
+        store.close_session().unwrap();
 
         let start = DateTime::from_timestamp(1_000_000, 0).unwrap();
         let end = DateTime::from_timestamp(1_003_600, 0).unwrap();
@@ -468,7 +468,7 @@ mod tests {
         let start = DateTime::from_timestamp(1_000_000, 0).unwrap();
 
         assert!(store.add_interval(id.clone(), start, start).is_err());
-        assert!(store.intervals().is_empty());
+        assert_eq!(store.intervals(), []);
     }
 
     #[test]
@@ -477,8 +477,8 @@ mod tests {
         let id = {
             let mut store = store_in(&dir);
             let id = store.add_project(name("alpha")).unwrap().id.clone();
-            store.start_session(id.clone()).unwrap();
-            store.stop_session().unwrap();
+            store.open_session(id.clone()).unwrap();
+            store.close_session().unwrap();
             id
         };
 
@@ -497,6 +497,25 @@ mod tests {
             dir.path(),
             &[
                 r#"{"v":1,"id":"e-proj","ts":1000,"event":{"type":"ProjectCreated","data":{"project_id":"p1","name":"alpha"}}}"#,
+                r#"{"v":1,"id":"e-start","ts":2000,"event":{"type":"SessionOpened","data":{"project_id":"p1","at":2000}}}"#,
+                r#"{"v":1,"id":"e-stop","ts":5600,"event":{"type":"SessionClosed","data":{"at":5600}}}"#,
+            ],
+        );
+
+        let store = store_in(&dir);
+
+        assert_eq!(store.intervals().len(), 1);
+        assert_eq!(store.intervals()[0].id.to_string(), "e-start");
+    }
+
+    #[test]
+    // Logs written before the Timer* -> Session* rename must keep reporting their time.
+    fn pre_rename_event_names_are_still_read() {
+        let dir = tempdir().unwrap();
+        seed(
+            dir.path(),
+            &[
+                r#"{"v":1,"id":"e-proj","ts":1000,"event":{"type":"ProjectCreated","data":{"project_id":"p1","name":"alpha"}}}"#,
                 r#"{"v":1,"id":"e-start","ts":2000,"event":{"type":"TimerStarted","data":{"project_id":"p1","at":2000}}}"#,
                 r#"{"v":1,"id":"e-stop","ts":5600,"event":{"type":"TimerStopped","data":{"at":5600}}}"#,
             ],
@@ -505,7 +524,8 @@ mod tests {
         let store = store_in(&dir);
 
         assert_eq!(store.intervals().len(), 1);
-        assert_eq!(store.intervals()[0].id.to_string(), "e-start");
+        assert!(store.session().is_none());
+        assert_eq!(store.last_project().unwrap().name.as_str(), "alpha");
     }
 
     #[test]

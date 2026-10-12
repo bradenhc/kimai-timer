@@ -3,8 +3,8 @@
 //! Defines projects and the in-memory index used to look them up.
 //!
 //! A [`Project`] pairs a stable [`ProjectId`] with the [`ProjectName`] the user types. Keeping the
-//! two separate is what allows a project to be renamed, or linked to a remote contract, without
-//! rewriting any history: events reference the ID, never the name.
+//! two separate is what allows a project to be renamed, or linked to its counterpart on a Kimai server,
+//! without rewriting any history: events reference the ID, never the name.
 //!
 //! [`ProjectSet`] is rebuilt from the event log every time the store is opened and is never
 //! persisted on its own. It indexes projects both ways - by ID for resolving references out of the
@@ -20,10 +20,8 @@ use uuid::Uuid;
 
 /// Information about a single project a user is working on.
 ///
-/// Projects are uniquely identified locally by their name and globally by their UUID. The global
-/// identifier allows project information to be exported and imported when moving data across
-/// machines, so a diffing algorithm can detect name collisions from different sources and prompt
-/// the user for action.
+/// A project's identity is its UUID, which never changes. Its name is a unique, human-facing handle
+/// used to refer to it on the command line, and may change without rewriting any history.
 ///
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Project {
