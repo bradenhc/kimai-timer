@@ -1,3 +1,5 @@
+<!-- Title: a short Conventional Commit subject line, ideally 50 characters or fewer (e.g. `fix: build the Report as a pure function`). It becomes the commit message when the PR is squash-merged. -->
+
 ## Objective
 
 <!-- One sentence summarizing the primary purpose of the change. -->

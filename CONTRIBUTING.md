@@ -57,7 +57,8 @@ that supersedes it.
 4. Run `mise run fmt`, then `mise run ci`. It must pass; CI runs the same task
    on every PR.
 5. Commit following [Commit Messages](#commit-messages) and open a PR against
-   `main`.
+   `main`. Title it like a commit subject: a short Conventional Commit line,
+   ideally 50 characters or fewer. Fill in the PR template.
 
 ## Commit Messages
 
