@@ -18,6 +18,7 @@ use clap::{Parser, Subcommand};
 use tracing::error;
 
 mod cmd;
+mod report;
 mod store;
 mod time_ext;
 mod trace;

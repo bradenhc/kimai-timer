@@ -31,6 +31,8 @@ that supersedes it.
 - `src/main.rs` parses arguments, opens the `Store`, and dispatches to a
   command.
 - `src/cmd/` holds one module per `kt` subcommand.
+- `src/report.rs` builds the Report from Intervals, the open Session, and a
+  window of Days, independent of the store and the system clock.
 - `src/store.rs` and `src/store/` own everything persisted: the Event Log and
   the state derived from it.
 - `tests/` holds integration tests that run the `kt` binary.

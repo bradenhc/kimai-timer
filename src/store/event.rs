@@ -51,7 +51,7 @@ pub(crate) struct EventId(String);
 impl EventId {
     /// Mints a fresh event ID.
     ///
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(Uuid::new_v4().into())
     }
 }
