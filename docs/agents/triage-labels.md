@@ -32,4 +32,4 @@ corresponding label string from these tables.
 ## Scope
 
 Every triaged issue should also carry at least one `scope/*` label (`cli`,
-`store`, `sync`). Apply every scope the issue touches.
+`store`, `report`, `sync`). Apply every scope the issue touches.

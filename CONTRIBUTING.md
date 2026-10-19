@@ -87,6 +87,8 @@ issue's labels tell you how to write the commit that resolves it.
 - `cli`: Command-line interface: argument parsing, prompts, and output
   (`src/main.rs`, `src/cmd`)
 - `store`: Local persistence: event log and data directory (`src/store.rs`)
+- `report`: Building the Report: time per Project per Day, rounding, and totals
+  (`src/report.rs`)
 - `sync`: Synchronization with the Kimai server
 
 If a change spans more than one scope, omit the scope (e.g.
