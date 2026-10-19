@@ -25,7 +25,8 @@ use chrono::{DateTime, Utc};
 
 use crate::time_ext::DateTimeExt;
 
-use event::{Envelope, Event, EventId};
+pub(crate) use event::EventId;
+use event::{Envelope, Event};
 
 pub(crate) use fs::StoreRoot;
 pub(crate) use interval::{Interval, RoundingMode, TimeDuration};
@@ -307,6 +308,19 @@ pub(crate) struct Session {
 
     /// When work began.
     pub(crate) start: DateTime<Utc>,
+}
+
+#[cfg(test)]
+impl Session {
+    /// Opens a session in memory only, for tests of code that consumes one.
+    ///
+    pub(crate) fn new(project_id: ProjectId, start: DateTime<Utc>) -> Self {
+        Self {
+            id: EventId::new(),
+            project_id,
+            start,
+        }
+    }
 }
 
 // -------------------------------------------------------------------------------------------------

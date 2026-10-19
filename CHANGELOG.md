@@ -13,6 +13,15 @@ and this project adheres to
 - `kt add` reports the exact duration of the interval it added, instead of
   rounding it. Rounding now happens only in `kt log`.
 
+### Fixed
+
+- `kt log` no longer crashes when an interval lies after the days it reports on,
+  such as leave added for tomorrow with `kt add --future`. Only time within the
+  reported days is counted, and `--raw` and `--json` list only intervals that
+  fall at least partly within them.
+- `kt log --days` rejects values below 1 or above 36525 (a century) with a clear
+  error instead of crashing.
+
 ## [0.5.0] - 2026-09-03
 
 ### Changed

@@ -31,6 +31,8 @@ that supersedes it.
 - `src/main.rs` parses arguments, opens the `Store`, and dispatches to a
   command.
 - `src/cmd/` holds one module per `kt` subcommand.
+- `src/report.rs` builds the Report from Intervals, the open Session, and a
+  window of Days, independent of the store and the system clock.
 - `src/store.rs` and `src/store/` own everything persisted: the Event Log and
   the state derived from it.
 - `tests/` holds integration tests that run the `kt` binary.
@@ -55,7 +57,8 @@ that supersedes it.
 4. Run `mise run fmt`, then `mise run ci`. It must pass; CI runs the same task
    on every PR.
 5. Commit following [Commit Messages](#commit-messages) and open a PR against
-   `main`.
+   `main`. Title it like a commit subject: a short Conventional Commit line,
+   ideally 50 characters or fewer. Fill in the PR template.
 
 ## Commit Messages
 
@@ -85,6 +88,8 @@ issue's labels tell you how to write the commit that resolves it.
 - `cli`: Command-line interface: argument parsing, prompts, and output
   (`src/main.rs`, `src/cmd`)
 - `store`: Local persistence: event log and data directory (`src/store.rs`)
+- `report`: Building the Report: time per Project per Day, rounding, and totals
+  (`src/report.rs`)
 - `sync`: Synchronization with the Kimai server
 
 If a change spans more than one scope, omit the scope (e.g.

@@ -79,3 +79,42 @@ fn duplicate_project_names_are_rejected() {
     kt(&dir, &["new", "alpha"]).success();
     kt(&dir, &["new", "alpha"]).failure();
 }
+
+#[test]
+fn log_reports_today_alongside_time_planned_for_tomorrow() {
+    let dir = tempdir().unwrap();
+    let tomorrow = (chrono::Local::now().date_naive() + chrono::Duration::days(1)).to_string();
+
+    kt(&dir, &["new", "leave"]).success();
+    kt(
+        &dir,
+        &[
+            "add",
+            "leave",
+            "--future",
+            "--start-date",
+            &tomorrow,
+            "--start-time",
+            "09:00",
+            "--stop-date",
+            &tomorrow,
+            "--stop-time",
+            "17:00",
+        ],
+    )
+    .success();
+
+    kt(&dir, &["log"]).success();
+    kt(&dir, &["log", "--week"]).success();
+
+    // Time planned for tomorrow is outside a window that ends today, so nothing is listed.
+    let listed = kt(&dir, &["log", "--json"]).success();
+    assert_eq!(listed.get_output().stdout.len(), 0);
+}
+
+#[test]
+fn log_rejects_fewer_than_one_day() {
+    let dir = tempdir().unwrap();
+
+    kt(&dir, &["log", "--days", "0"]).failure();
+}
